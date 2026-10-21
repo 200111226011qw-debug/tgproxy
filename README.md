@@ -1,12 +1,17 @@
 # tgproxy — Telegram 代理管理工具
 
-同一核心能力的两个平台实现：**桌面版**（Python 本地服务 + Web UI）与 **安卓版**（Kotlin + Jetpack Compose 原生应用）。
+本仓库包含 Telegram 代理管理工具的两个平台实现，以及一个独立的版本发布管理客户端：
+
+- **桌面版**（Python 本地服务 + Web UI）
+- **安卓版**（Kotlin + Jetpack Compose 原生应用）
+- **版本发布管理客户端**（单文件 HTML，完整的软件发布流程）
 
 ## 仓库结构
 
 ```
-├── tgproxy/           # 桌面版：Python 标准库，零第三方依赖，python app.py 一条命令启动
-└── tgproxy-android/   # 安卓版：Kotlin + Compose，Android Studio 打开即构建
+├── tgproxy/                   # 桌面版：Python 标准库，零第三方依赖，python app.py 一条命令启动
+├── tgproxy-android/           # 安卓版：Kotlin + Compose，Android Studio 打开即构建
+└── version-release-client/    # 版本发布管理客户端：单文件 HTML，双击即用
 ```
 
 ## 核心功能（两版本一致）
@@ -25,3 +30,4 @@ https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/prox
 
 - 桌面版：见 [tgproxy/README.md](tgproxy/README.md)
 - 安卓版：见 [tgproxy-android/README.md](tgproxy-android/README.md)
+- 版本发布管理客户端：见 [version-release-client/README.md](version-release-client/README.md)

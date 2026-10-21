@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>版本发布管理客户端</title>
+<style>
+  :root{
+    --primary:#2563EB; --primary-dark:#1D4ED8;
+    --green:#16A34A; --amber:#D97706; --red:#DC2626;
+    --bg:#F4F6FA; --card:#FFFFFF; --border:#E5E7EB;
+    --text:#1F2937; --text-2:#6B7280; --text-3:#9CA3AF;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Microsoft YaHei","PingFang SC","Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+  .container{max-width:980px;margin:0 auto;padding:24px 20px 48px}
+
+  /* 头部 */
+  .app-header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+  .app-header h1{font-size:22px;font-weight:700}
+  .app-header .subtitle{font-size:13px;color:var(--text-2);margin-top:4px}
+  .header-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+  /* 按钮 */
+  .btn{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text);cursor:pointer;transition:all .15s;white-space:nowrap}
+  .btn:hover{border-color:var(--primary);color:var(--primary)}
+  .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+  .btn.primary:hover{background:var(--primary-dark)}
+  .btn.green{background:var(--green);border-color:var(--green);color:#fff}
+  .btn.green:hover{filter:brightness(.95)}
+  .btn.red{color:var(--red);border-color:#FECACA}
+  .btn.red:hover{background:#FEF2F2;border-color:var(--red)}
+  .btn.sm{padding:5px 10px;font-size:12px;border-radius:6px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+
+  /* 统计与工具条 */
+  .toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+  .stats{display:flex;gap:8px;flex-wrap:wrap}
+  .stat-chip{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12px;color:var(--text-2)}
+  .stat-chip b{font-size:14px;color:var(--text);margin-right:2px}
+  .stat-chip.published b{color:var(--green)}
+  .stat-chip.draft b{color:var(--amber)}
+  .stat-chip.unpublished b{color:var(--red)}
+  .toolbar-right{display:flex;gap:8px;flex-wrap:wrap}
+
+  /* 过滤标签 */
+  .filters{display:flex;gap:4px;background:#EAEEF5;border-radius:10px;padding:4px;margin-bottom:16px;width:max-content}
+  .filters button{border:none;background:transparent;padding:6px 14px;border-radius:7px;font-size:13px;color:var(--text-2);cursor:pointer}
+  .filters button.active{background:var(--card);color:var(--text);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .filters button .count{font-size:11px;color:var(--text-3);margin-left:2px}
+
+  /* 版本卡片 */
+  .version-list{display:flex;flex-direction:column;gap:12px}
+  .version-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;transition:box-shadow .15s}
+  .version-card:hover{box-shadow:0 4px 14px rgba(30,41,59,.08)}
+  .version-card .row-1{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+  .version-number{font-size:17px;font-weight:700;font-family:Consolas,Menlo,monospace}
+  .badge{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:600;white-space:nowrap}
+  .badge.type{background:#DBEAFE;color:#1E40AF}
+  .badge.draft{background:#FEF3C7;color:#92400E}
+  .badge.published{background:#DCFCE7;color:#166534}
+  .badge.unpublished{background:#FEE2E2;color:#B91C1C}
+  .version-meta{font-size:12px;color:var(--text-2);margin-bottom:8px}
+  .version-meta span+span::before{content:"·";margin:0 6px;color:var(--text-3)}
+  .version-notes{font-size:13px;color:var(--text);line-height:1.6;white-space:pre-wrap;word-break:break-word;background:#F9FAFB;border:1px solid #F3F4F6;border-radius:8px;padding:10px 12px;margin-bottom:12px}
+  .version-notes.empty{color:var(--text-3);font-style:italic}
+  .row-actions{display:flex;gap:8px;flex-wrap:wrap}
+
+  /* 空状态 */
+  .empty-state{background:var(--card);border:1.5px dashed #D6DCE5;border-radius:14px;padding:56px 24px;text-align:center}
+  .empty-state svg{margin-bottom:14px;opacity:.85}
+  .empty-state h2{font-size:17px;font-weight:700;margin-bottom:8px}
+  .empty-state p{font-size:13px;color:var(--text-2);margin-bottom:20px;line-height:1.7}
+
+  /* 弹窗 */
+  .modal-overlay{position:fixed;inset:0;background:rgba(17,24,39,.45);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .modal-overlay[hidden]{display:none}
+  .modal{background:var(--card);border-radius:14px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;padding:22px 24px}
+  .modal h2{font-size:17px;font-weight:700;margin-bottom:4px}
+  .modal .modal-sub{font-size:12px;color:var(--text-2);margin-bottom:18px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:13px;font-weight:600;margin-bottom:6px}
+  .field label .req{color:var(--red);margin-left:2px}
+  .field label .lock-tip{font-weight:400;font-size:11px;color:var(--text-3);margin-left:6px}
+  .field input,.field select,.field textarea{width:100%;border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-size:13px;font-family:inherit;color:var(--text);background:#fff;transition:border-color .15s}
+  .field input:focus,.field select:focus,.field textarea:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+  .field input:disabled,.field select:disabled{background:#F3F4F6;color:var(--text-3);cursor:not-allowed}
+  .field textarea{resize:vertical;min-height:88px}
+  .field .hint{font-size:11px;color:var(--text-3);margin-top:4px}
+  .field-error{font-size:12px;color:var(--red);margin-top:5px;min-height:16px}
+  .modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
+
+  /* Toast */
+  #toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%) translateY(20px);background:#1F2937;color:#fff;font-size:13px;padding:10px 18px;border-radius:10px;opacity:0;pointer-events:none;transition:all .25s;z-index:99;max-width:80vw}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  #toast.error{background:var(--red)}
+
+  .app-footer{margin-top:28px;text-align:center;font-size:12px;color:var(--text-3);line-height:1.8}
+  .app-footer code{background:#EAEEF5;border-radius:4px;padding:1px 6px;font-family:Consolas,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="container">
+  <header class="app-header">
+    <div>
+      <h1>版本发布管理</h1>
+      <div class="subtitle">完整的软件发布流程：创建 → 编辑 → 发布 → 取消发布 · 数据保存在本机浏览器</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn" id="btnExport">导出数据</button>
+      <button class="btn" id="btnImport">导入数据</button>
+      <button class="btn primary" id="btnCreate">+ 创建新版本</button>
+      <input type="file" id="importFile" accept=".json,application/json" hidden>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <div class="stats" id="stats"></div>
+    <div class="toolbar-right"></div>
+  </div>
+
+  <div class="filters" id="filters"></div>
+
+  <div class="version-list" id="versionList"></div>
+
+  <div class="empty-state" id="emptyState" hidden>
+    <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
+      <rect x="10" y="18" width="52" height="40" rx="6" stroke="#9CA3AF" stroke-width="2.5" fill="#F9FAFB"/>
+      <path d="M10 30h52" stroke="#9CA3AF" stroke-width="2.5"/>
+      <circle cx="17" cy="24" r="1.8" fill="#9CA3AF"/><circle cx="24" cy="24" r="1.8" fill="#9CA3AF"/>
+      <rect x="20" y="38" width="20" height="4" rx="2" fill="#D1D5DB"/>
+      <rect x="20" y="46" width="32" height="4" rx="2" fill="#E5E7EB"/>
+      <path d="M52 8l3 6 6 1-4.5 4.5 1 6-5.5-3-5.5 3 1-6L43 15l6-1 3-6z" fill="#FBBF24"/>
+    </svg>
+    <h2 id="emptyTitle">暂无发布版本</h2>
+    <p id="emptyDesc">创建第一个版本，填写版本号、类型、发布时间与发布说明，走完整个发布流程。</p>
+    <button class="btn primary" id="btnEmptyCreate">+ 创建新版本</button>
+  </div>
+
+  <footer class="app-footer">
+    状态流转：<code>草稿</code> → 发布 → <code>已发布</code> → 取消发布 → <code>已下架</code> → 重新发布 → <code>已发布</code><br>
+    发布后版本号 / 类型 / 发布时间锁定，仅可补充发布说明或取消发布 · 纯本地运行，无任何外部依赖
+  </footer>
+</div>
+
+<!-- 创建 / 编辑弹窗 -->
+<div class="modal-overlay" id="modalOverlay" hidden>
+  <div class="modal">
+    <h2 id="modalTitle">创建新版本</h2>
+    <div class="modal-sub" id="modalSub">保存为草稿后可继续编辑，确认无误再执行发布。</div>
+    <form id="versionForm" novalidate>
+      <div class="field">
+        <label for="fVersion">版本号<span class="req">*</span><span class="lock-tip" id="versionLockTip" hidden>发布后锁定</span></label>
+        <input id="fVersion" type="text" maxlength="32" placeholder="例如 1.0.0 / 1.2.3-beta / 2026.10.22" autocomplete="off">
+        <div class="hint">全局唯一，仅支持字母、数字及 . _ + -</div>
+        <div class="field-error" id="errVersion"></div>
+      </div>
+      <div class="field">
+        <label for="fType">版本类型<span class="req">*</span><span class="lock-tip" id="typeLockTip" hidden>发布后锁定</span></label>
+        <select id="fType">
+          <option value="">请选择版本类型</option>
+          <option value="正式版">正式版</option>
+          <option value="测试版">测试版</option>
+          <option value="预览版">预览版</option>
+          <option value="补丁版">补丁版</option>
+        </select>
+        <div class="field-error" id="errType"></div>
+      </div>
+      <div class="field">
+        <label for="fReleaseAt">发布时间<span class="lock-tip" id="timeLockTip" hidden>发布后锁定</span></label>
+        <input id="fReleaseAt" type="datetime-local">
+        <div class="hint">发布前必填，创建时默认当前时间</div>
+        <div class="field-error" id="errReleaseAt"></div>
+      </div>
+      <div class="field">
+        <label for="fNotes">发布说明</label>
+        <textarea id="fNotes" maxlength="2000" placeholder="记录本版本的更新内容、修复项与已知问题…（发布前必填）"></textarea>
+        <div class="field-error" id="errNotes"></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="btnModalCancel">取消</button>
+        <button type="submit" class="btn" id="btnSave">保存</button>
+        <button type="submit" class="btn green" id="btnSavePublish">保存并发布</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+(function(){
+  'use strict';
+
+  /* ================= 常量与状态 ================= */
+  var STORAGE_KEY = 'version-release-client.data.v1';
+  var STATUS = { DRAFT:'draft', PUBLISHED:'published', UNPUBLISHED:'unpublished' };
+  var STATUS_META = {
+    draft:      { label:'草稿',   cls:'draft' },
+    published:  { label:'已发布', cls:'published' },
+    unpublished:{ label:'已下架', cls:'unpublished' }
+  };
+  // 合法状态流转：from -> [to]
+  var TRANSITIONS = {
+    draft:       ['published'],
+    published:   ['unpublished'],
+    unpublished: ['published']
+  };
+  var VERSION_RE = /^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$/;
+  var FILTERS = [
+    { key:'all', label:'全部' },
+    { key:'published', label:'已发布' },
+    { key:'draft', label:'草稿' },
+    { key:'unpublished', label:'已下架' }
+  ];
+
+  var state = { versions: [], filter: 'all' };
+  var modal = { mode:'create', editingId:null, pendingAction:'save' };
+
+  /* ================= 工具 ================= */
+  function $(id){ return document.getElementById(id); }
+  function uid(){ return 'v_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8); }
+  function nowISO(){ return new Date().toISOString(); }
+  function esc(s){
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function pad(n){ return String(n).padStart(2,'0'); }
+  function toLocalInputValue(d){
+    d = d || new Date();
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  function fmtDateTime(v){
+    if(!v) return '—';
+    var d = new Date(v);
+    if(isNaN(d.getTime())) return esc(v);
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+  var toastTimer = null;
+  function toast(msg, isError){
+    var el = $('toast');
+    el.textContent = msg;
+    el.className = 'show' + (isError ? ' error' : '');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ el.className = ''; }, 2600);
+  }
+  function canTransition(from, to){
+    return (TRANSITIONS[from] || []).indexOf(to) !== -1;
+  }
+
+  /* ================= 持久化 ================= */
+  function load(){
+    try{
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if(raw){
+        var data = JSON.parse(raw);
+        if(data && Array.isArray(data.versions)){
+          state.versions = data.versions.filter(function(v){ return v && v.id && v.version; });
+        }
+      }
+    }catch(e){ /* 存储损坏时从空开始 */ }
+  }
+  function save(){
+    try{
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ versions: state.versions, savedAt: nowISO() }));
+    }catch(e){
+      toast('保存失败：浏览器本地存储不可用', true);
+    }
+  }
+
+  /* ================= 校验 ================= */
+  // 基础校验（保存草稿时）：版本号 + 类型
+  function validateBasic(fields, editingId){
+    var errors = {};
+    var v = (fields.version || '').trim();
+    if(!v){
+      errors.version = '版本号不能为空';
+    }else if(!VERSION_RE.test(v)){
+      errors.version = '版本号仅支持字母、数字及 . _ + -，长度不超过 32';
+    }else if(state.versions.some(function(x){ return x.id !== editingId && String(x.version).toLowerCase() === v.toLowerCase(); })){
+      errors.version = '该版本号已存在，请使用其他版本号';
+    }
+    if(!fields.type){
+      errors.type = '请选择版本类型';
+    }
+    return errors;
+  }
+  // 发布校验：基础 + 发布时间 + 发布说明
+  function validatePublish(fields, editingId){
+    var errors = validateBasic(fields, editingId);
+    if(!fields.releaseAt){
+      errors.releaseAt = '发布时间不能为空（发布前必填）';
+    }
+    if(!(fields.notes || '').trim()){
+      errors.notes = '发布说明不能为空（发布前必填）';
+    }
+    return errors;
+  }
+  function showFieldErrors(errors){
+    $('errVersion').textContent = errors.version || '';
+    $('errType').textContent = errors.type || '';
+    $('errReleaseAt').textContent = errors.releaseAt || '';
+    $('errNotes').textContent = errors.notes || '';
+  }
+
+  /* ================= 渲染 ================= */
+  function sortedVersions(){
+    var rank = { published:0, draft:1, unpublished:2 };
+    return state.versions.slice().sort(function(a,b){
+      if(rank[a.status] !== rank[b.status]) return rank[a.status] - rank[b.status];
+      var ta = a.status === 'published' ? (a.publishedAt || a.releaseAt || '') :
+               a.status === 'unpublished' ? (a.unpublishedAt || a.updatedAt || '') : (a.updatedAt || a.createdAt || '');
+      var tb = b.status === 'published' ? (b.publishedAt || b.releaseAt || '') :
+               b.status === 'unpublished' ? (b.unpublishedAt || b.updatedAt || '') : (b.updatedAt || b.createdAt || '');
+      return ta < tb ? 1 : ta > tb ? -1 : 0;
+    });
+  }
+  function filteredVersions(){
+    var list = sortedVersions();
+    if(state.filter === 'all') return list;
+    return list.filter(function(v){ return v.status === state.filter; });
+  }
+  function countBy(status){
+    return state.versions.filter(function(v){ return v.status === status; }).length;
+  }
+
+  function renderStats(){
+    var html =
+      '<div class="stat-chip published">已发布 <b>' + countBy(STATUS.PUBLISHED) + '</b></div>' +
+      '<div class="stat-chip draft">草稿 <b>' + countBy(STATUS.DRAFT) + '</b></div>' +
+      '<div class="stat-chip unpublished">已下架 <b>' + countBy(STATUS.UNPUBLISHED) + '</b></div>' +
+      '<div class="stat-chip">共 <b>' + state.versions.length + '</b> 个版本</div>';
+    $('stats').innerHTML = html;
+  }
+
+  function renderFilters(){
+    var html = '';
+    FILTERS.forEach(function(f){
+      var n = f.key === 'all' ? state.versions.length : countBy(f.key);
+      html += '<button data-filter="' + f.key + '" class="' + (state.filter === f.key ? 'active' : '') + '">' +
+              esc(f.label) + '<span class="count">' + n + '</span></button>';
+    });
+    $('filters').innerHTML = html;
+  }
+
+  function actionButtons(v){
+    var html = '';
+    if(v.status === STATUS.DRAFT){
+      html += '<button class="btn sm" data-action="edit" data-id="' + v.id + '">编辑</button>';
+      html += '<button class="btn sm green" data-action="publish" data-id="' + v.id + '">发布</button>';
+    }else if(v.status === STATUS.PUBLISHED){
+      html += '<button class="btn sm" data-action="edit" data-id="' + v.id + '">编辑说明</button>';
+      html += '<button class="btn sm red" data-action="unpublish" data-id="' + v.id + '">取消发布</button>';
+    }else if(v.status === STATUS.UNPUBLISHED){
+      html += '<button class="btn sm" data-action="edit" data-id="' + v.id + '">编辑</button>';
+      html += '<button class="btn sm green" data-action="publish" data-id="' + v.id + '">重新发布</button>';
+    }
+    return html;
+  }
+
+  function renderList(){
+    var list = filteredVersions();
+    var listEl = $('versionList');
+    var emptyEl = $('emptyState');
+
+    if(!list.length){
+      listEl.innerHTML = '';
+      emptyEl.hidden = false;
+      var title = '暂无发布版本', desc = '创建第一个版本，填写版本号、类型、发布时间与发布说明，走完整个发布流程。';
+      if(state.filter === 'draft'){ title = '暂无草稿版本'; desc = '还没有草稿。点击「创建新版本」开始编写，确认后再发布。'; }
+      else if(state.filter === 'unpublished'){ title = '暂无已下架版本'; desc = '当前没有被取消发布的版本。'; }
+      else if(state.filter === 'published' && state.versions.length){ title = '暂无已发布版本'; desc = '所有版本都还未发布，去「草稿」中挑一个发布吧。'; }
+      $('emptyTitle').textContent = title;
+      $('emptyDesc').textContent = desc;
+      return;
+    }
+
+    emptyEl.hidden = true;
+    var html = '';
+    list.forEach(function(v){
+      var meta = STATUS_META[v.status] || STATUS_META.draft;
+      var notes = (v.notes || '').trim();
+      html += '<div class="version-card">' +
+        '<div class="row-1">' +
+          '<span class="version-number">' + esc(v.version) + '</span>' +
+          '<span class="badge type">' + esc(v.type || '未设置') + '</span>' +
+          '<span class="badge ' + meta.cls + '">' + meta.label + '</span>' +
+        '</div>' +
+        '<div class="version-meta">' +
+          '<span>发布时间：' + fmtDateTime(v.releaseAt) + '</span>' +
+          (v.status === STATUS.PUBLISHED && v.publishedAt ? '<span>发布完成：' + fmtDateTime(v.publishedAt) + '</span>' : '') +
+          (v.status === STATUS.UNPUBLISHED && v.unpublishedAt ? '<span>下架时间：' + fmtDateTime(v.unpublishedAt) + '</span>' : '') +
+        '</div>' +
+        '<div class="version-notes' + (notes ? '' : ' empty') + '">' + (notes ? esc(notes) : '暂无发布说明') + '</div>' +
+        '<div class="row-actions">' + actionButtons(v) + '</div>' +
+      '</div>';
+    });
+    listEl.innerHTML = html;
+  }
+
+  function render(){
+    renderStats();
+    renderFilters();
+    renderList();
+  }
+
+  /* ================= 弹窗 ================= */
+  function openModal(mode, id){
+    modal.mode = mode;
+    modal.editingId = id || null;
+    modal.pendingAction = 'save';
+    showFieldErrors({});
+
+    var entry = id ? state.versions.find(function(v){ return v.id === id; }) : null;
+    var locked = !!(entry && entry.status === STATUS.PUBLISHED);
+
+    $('modalTitle').textContent = mode === 'create' ? '创建新版本' : ('编辑版本 ' + (entry ? entry.version : ''));
+    $('modalSub').textContent = locked
+      ? '该版本已发布：版本号、类型与发布时间已锁定，仅可补充发布说明。'
+      : '保存为草稿后可继续编辑，确认无误再执行发布。';
+    $('btnSavePublish').textContent = locked ? '保存修改' : '保存并发布';
+
+    $('versionLockTip').hidden = !locked;
+    $('typeLockTip').hidden = !locked;
+    $('timeLockTip').hidden = !locked;
+    $('fVersion').disabled = locked;
+    $('fType').disabled = locked;
+    $('fReleaseAt').disabled = locked;
+
+    $('fVersion').value = entry ? entry.version : '';
+    $('fType').value = entry ? (entry.type || '') : '';
+    $('fReleaseAt').value = entry ? (entry.releaseAt || '') : toLocalInputValue();
+    $('fNotes').value = entry ? (entry.notes || '') : '';
+
+    $('modalOverlay').hidden = false;
+    setTimeout(function(){ (locked ? $('fNotes') : $('fVersion')).focus(); }, 30);
+  }
+  function closeModal(){
+    $('modalOverlay').hidden = true;
+  }
+
+  function collectForm(){
+    return {
+      version: $('fVersion').value,
+      type: $('fType').value,
+      releaseAt: $('fReleaseAt').value,
+      notes: $('fNotes').value
+    };
+  }
+
+  function submitModal(){
+    var fields = collectForm();
+    var entry = modal.editingId ? state.versions.find(function(v){ return v.id === modal.editingId; }) : null;
+    var publishing = modal.pendingAction === 'publish';
+    // 已发布版本保存：仅允许改说明，状态保持已发布
+    if(entry && entry.status === STATUS.PUBLISHED && !publishing){
+      publishing = false;
+    }else if(entry && entry.status === STATUS.PUBLISHED && publishing){
+      publishing = false; // “保存并发布”对已发布版本退化为保存说明
+    }
+
+    var errors = publishing ? validatePublish(fields, modal.editingId) : validateBasic(fields, modal.editingId);
+    // 编辑已发布版本时，版本号/类型被锁定，基础校验会因空值误报——用原值兜底
+    if(entry && entry.status === STATUS.PUBLISHED){
+      errors = validateBasic({ version: entry.version, type: entry.type }, modal.editingId);
+      if(publishing || true){
+        if(!(fields.notes || '').trim()) errors.notes = '发布说明不能为空';
+      }
+    }
+    showFieldErrors(errors);
+    if(Object.keys(errors).length) return;
+
+    var now = nowISO();
+    if(modal.mode === 'create'){
+      var item = {
+        id: uid(),
+        version: fields.version.trim(),
+        type: fields.type,
+        releaseAt: fields.releaseAt || '',
+        notes: fields.notes.trim(),
+        status: publishing ? STATUS.PUBLISHED : STATUS.DRAFT,
+        createdAt: now,
+        updatedAt: now,
+        publishedAt: publishing ? now : null,
+        unpublishedAt: null
+      };
+      state.versions.push(item);
+      save(); render(); closeModal();
+      toast(publishing ? ('版本 ' + item.version + ' 已创建并发布') : ('版本 ' + item.version + ' 已保存为草稿'));
+    }else{
+      entry.notes = fields.notes.trim();
+      entry.updatedAt = now;
+      if(entry.status !== STATUS.PUBLISHED){
+        entry.releaseAt = fields.releaseAt || '';
+        entry.type = fields.type;
+        if(publishing && canTransition(entry.status, STATUS.PUBLISHED)){
+          var pubErrors = validatePublish({ version: entry.version, type: entry.type, releaseAt: entry.releaseAt, notes: entry.notes }, entry.id);
+          if(Object.keys(pubErrors).length){
+            showFieldErrors(pubErrors);
+            return;
+          }
+          entry.status = STATUS.PUBLISHED;
+          entry.publishedAt = now;
+          entry.unpublishedAt = null;
+        }
+      }
+      save(); render(); closeModal();
+      toast('版本 ' + entry.version + ' 已保存');
+    }
+  }
+
+  /* ================= 卡片动作 ================= */
+  function publishVersion(id){
+    var entry = state.versions.find(function(v){ return v.id === id; });
+    if(!entry || !canTransition(entry.status, STATUS.PUBLISHED)) return;
+    var errors = validatePublish({ version: entry.version, type: entry.type, releaseAt: entry.releaseAt, notes: entry.notes }, entry.id);
+    if(Object.keys(errors).length){
+      // 校验不通过：打开编辑弹窗并展示错误，引导补全
+      openModal('edit', id);
+      showFieldErrors(errors);
+      return;
+    }
+    entry.status = STATUS.PUBLISHED;
+    entry.publishedAt = nowISO();
+    entry.unpublishedAt = null;
+    entry.updatedAt = entry.publishedAt;
+    save(); render();
+    toast('版本 ' + entry.version + ' 已发布');
+  }
+
+  function unpublishVersion(id){
+    var entry = state.versions.find(function(v){ return v.id === id; });
+    if(!entry || !canTransition(entry.status, STATUS.UNPUBLISHED)) return;
+    if(!confirm('确定取消发布版本 ' + entry.version + ' 吗？\n取消后将进入「已下架」状态，可随时重新发布。')) return;
+    entry.status = STATUS.UNPUBLISHED;
+    entry.unpublishedAt = nowISO();
+    entry.updatedAt = entry.unpublishedAt;
+    save(); render();
+    toast('版本 ' + entry.version + ' 已取消发布');
+  }
+
+  /* ================= 导出 / 导入 ================= */
+  function exportData(){
+    var payload = { app:'version-release-client', exportedAt: nowISO(), versions: state.versions };
+    var blob = new Blob([JSON.stringify(payload, null, 2)], { type:'application/json' });
+    var a = document.createElement('a');
+    var d = new Date();
+    a.href = URL.createObjectURL(blob);
+    a.download = 'version-releases-' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+    toast('已导出 ' + state.versions.length + ' 条版本记录');
+  }
+
+  function importData(file){
+    var reader = new FileReader();
+    reader.onload = function(){
+      try{
+        var data = JSON.parse(reader.result);
+        var list = Array.isArray(data) ? data : (data && Array.isArray(data.versions) ? data.versions : null);
+        if(!list) throw new Error('bad format');
+        var added = 0, skipped = 0;
+        list.forEach(function(raw){
+          if(!raw || !raw.version || !VERSION_RE.test(String(raw.version).trim())){ skipped++; return; }
+          var version = String(raw.version).trim();
+          var exists = state.versions.some(function(x){ return String(x.version).toLowerCase() === version.toLowerCase(); });
+          if(exists){ skipped++; return; }
+          var status = [STATUS.DRAFT, STATUS.PUBLISHED, STATUS.UNPUBLISHED].indexOf(raw.status) !== -1 ? raw.status : STATUS.DRAFT;
+          state.versions.push({
+            id: uid(),
+            version: version,
+            type: raw.type || '',
+            releaseAt: raw.releaseAt || '',
+            notes: raw.notes || '',
+            status: status,
+            createdAt: raw.createdAt || nowISO(),
+            updatedAt: raw.updatedAt || nowISO(),
+            publishedAt: status === STATUS.PUBLISHED ? (raw.publishedAt || nowISO()) : null,
+            unpublishedAt: status === STATUS.UNPUBLISHED ? (raw.unpublishedAt || nowISO()) : null
+          });
+          added++;
+        });
+        save(); render();
+        toast('导入完成：新增 ' + added + ' 条，跳过 ' + skipped + ' 条（版本号缺失或重复）');
+      }catch(e){
+        toast('导入失败：文件不是有效的版本数据 JSON', true);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  /* ================= 事件绑定 ================= */
+  function bind(){
+    $('btnCreate').addEventListener('click', function(){ openModal('create'); });
+    $('btnEmptyCreate').addEventListener('click', function(){ openModal('create'); });
+    $('btnModalCancel').addEventListener('click', closeModal);
+    $('modalOverlay').addEventListener('click', function(e){ if(e.target === this) closeModal(); });
+    document.addEventListener('keydown', function(e){ if(e.key === 'Escape' && !$('modalOverlay').hidden) closeModal(); });
+
+    $('btnSave').addEventListener('click', function(){ modal.pendingAction = 'save'; });
+    $('btnSavePublish').addEventListener('click', function(){ modal.pendingAction = 'publish'; });
+    $('versionForm').addEventListener('submit', function(e){ e.preventDefault(); submitModal(); });
+
+    $('filters').addEventListener('click', function(e){
+      var btn = e.target.closest('button[data-filter]');
+      if(!btn) return;
+      state.filter = btn.getAttribute('data-filter');
+      render();
+    });
+
+    $('versionList').addEventListener('click', function(e){
+      var btn = e.target.closest('button[data-action]');
+      if(!btn) return;
+      var action = btn.getAttribute('data-action');
+      var id = btn.getAttribute('data-id');
+      if(action === 'edit') openModal('edit', id);
+      else if(action === 'publish') publishVersion(id);
+      else if(action === 'unpublish') unpublishVersion(id);
+    });
+
+    $('btnExport').addEventListener('click', exportData);
+    $('btnImport').addEventListener('click', function(){ $('importFile').click(); });
+    $('importFile').addEventListener('change', function(e){
+      if(e.target.files && e.target.files[0]) importData(e.target.files[0]);
+      e.target.value = '';
+    });
+  }
+
+  /* ================= 启动 ================= */
+  load();
+  bind();
+  render();
+})();
+</script>
+</body>
+</html>
