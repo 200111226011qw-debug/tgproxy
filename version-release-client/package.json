@@ -1,0 +1,33 @@
+{
+  "name": "@200111226011qw-debug/version-release-client",
+  "version": "1.0.0",
+  "description": "版本发布管理客户端：完整的软件发布流程（草稿/已发布/已下架），单文件零依赖，双击即用",
+  "keywords": [
+    "version",
+    "release",
+    "release-management",
+    "versioning",
+    "changelog"
+  ],
+  "license": "MIT",
+  "author": "200111226011qw-debug",
+  "bin": {
+    "version-release-client": "bin/open.js"
+  },
+  "files": [
+    "index.html",
+    "bin/open.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/200111226011qw-debug/tgproxy.git",
+    "directory": "version-release-client"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}

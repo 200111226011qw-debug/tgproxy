@@ -9,6 +9,31 @@
 - **直接双击 `index.html`** 用浏览器打开（Chrome / Edge / Firefox 均可），或拖入浏览器窗口
 - 数据保存在浏览器本地（localStorage），关闭再打开不丢失；换浏览器/清缓存前请先**导出数据**
 
+## 通过 npm 安装运行（GitHub Packages）
+
+本客户端已发布为 npm 包：`@200111226011qw-debug/version-release-client`
+
+```bash
+# 一次性使用（无需安装）
+npx @200111226011qw-debug/version-release-client
+
+# 或全局安装后使用
+npm install -g @200111226011qw-debug/version-release-client
+version-release-client
+```
+
+安装/使用前需将 GitHub 包注册中心加入 npm 作用域配置（一次性）：
+
+```bash
+npm config set @200111226011qw-debug:registry https://npm.pkg.github.com
+```
+
+若包仓库为私有，还需登录认证（使用有 `read:packages` 权限的 PAT）：
+
+```bash
+npm login --scope=@200111226011qw-debug --registry=https://npm.pkg.github.com
+```
+
 ## 功能一览
 
 ### 版本字段
@@ -48,8 +73,11 @@
 
 ```
 version-release-client/
-├── index.html   # 客户端全部内容（结构 + 样式 + 逻辑，单文件）
-└── README.md    # 本说明
+├── index.html      # 客户端全部内容（结构 + 样式 + 逻辑，单文件）
+├── bin/open.js     # npm 包启动器（npx 运行时打开 index.html）
+├── package.json    # npm 包定义（发布到 GitHub Packages）
+├── .npmrc          # 包注册中心配置（令牌经 NODE_AUTH_TOKEN 环境变量注入，不落盘）
+└── README.md       # 本说明
 ```
 
 ## 技术说明
