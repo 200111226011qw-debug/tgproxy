@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式窗口背景（防冷启动闪白；Compose 侧由 TgProxyTheme 接管配色） -->
+    <style name="Theme.TgProxy" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#111827</item>
+        <item name="android:statusBarColor">#111827</item>
+        <item name="android:navigationBarColor">#111827</item>
+    </style>
+</resources>

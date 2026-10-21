@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 24-25 矢量回退图标：蓝底白双向箭头（自适应图标的等效降级） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="192dp"
+    android:height="192dp"
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+    <path
+        android:fillColor="#2563EB"
+        android:pathData="M0,0 L192,0 L192,192 L0,192 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M96,81.6 L78.4,81.6 L78.4,71.2 L56.8,96 L78.4,120.8 L78.4,110.4 L96,110.4 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M96,81.6 L113.6,81.6 L113.6,71.2 L135.2,96 L113.6,120.8 L113.6,110.4 L96,110.4 Z" />
+</vector>

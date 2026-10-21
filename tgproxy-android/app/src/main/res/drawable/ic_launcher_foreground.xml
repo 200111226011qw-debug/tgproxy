@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 白色双向箭头：代理交换语义；位于自适应图标 72dp 安全区内 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,46 L44,46 L44,40 L32,54 L44,68 L44,62 L54,62 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,46 L64,46 L64,40 L76,54 L64,68 L64,62 L54,62 Z" />
+</vector>

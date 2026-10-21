@@ -1,0 +1,178 @@
+%% tgproxy 安卓版 - 程序调用流程（提取自 docs/ARCHITECTURE.md §4）
+
+%% 4.1 启动即刷新（冷启动，P0-10）
+sequenceDiagram
+    autonumber
+    participant A as MainActivity
+    participant VM as MainViewModel
+    participant S as SettingsStore
+    participant R as ProxyRepository
+    participant F as ProxyFetcher
+    participant P as ProxyParser
+    participant T as ProxyTester
+    participant U as MainScreen
+
+    A->>A: onCreate → by viewModels { factory(...) }
+    VM->>VM: init：collect settings + refresh()
+    VM->>S: settings.collect（首帧）
+    S-->>VM: Settings(interval=10, url=DEFAULT)
+    VM->>VM: intervalSec=600；startCountdown() deadline=now+600s
+    VM->>VM: refresh() → tryLock 成功
+    VM->>U: uiState：fetching=true, error=null
+    VM->>R: refresh(proxyListUrl)
+    R->>F: fetch(url)（OkHttp，connect/read 15s，UA 固定）
+    F-->>R: proxy.txt 文本
+    R->>P: parse(text)
+    P-->>R: ParseResult(entries, excludedCount, droppedCount)
+    R->>T: testAll(entries)（Semaphore(20)，5s/连接）
+    T-->>R: entries + latencyMs/status
+    R-->>VM: Success(entries, stats, updatedAt)
+    Note over R: stats.excluded = excludedCount + droppedCount
+    VM->>VM: sortProxies(entries)
+    VM->>U: uiState：proxies/stats/updatedAt，fetching=false
+    U->>U: LazyColumn 渲染卡片（可用在前、延迟升序）
+
+%% 4.2 手动刷新与互斥（P0-6，等价桌面版 _fetching）
+sequenceDiagram
+    autonumber
+    participant U as MainScreen
+    participant VM as MainViewModel
+    participant R as ProxyRepository
+
+    U->>VM: refresh()（按钮/下拉刷新）
+    alt tryLock 成功
+        VM->>VM: uiState.fetching=true（按钮禁用 + 加载遮罩）
+        VM->>R: refresh(url)
+        R-->>VM: Success / Failure
+        VM->>VM: 更新 uiState；finally fetching=false
+    else tryLock 失败（已在刷新中）
+        VM-->>U: 直接忽略（不排队、不二次执行）
+    end
+    Note over U,R: 刷新期间再次点击按钮或下拉刷新均走「忽略」分支
+
+%% 4.3 前台定时刷新（P0-8/P0-12）
+sequenceDiagram
+    autonumber
+    participant VM as MainViewModel
+    participant U as MainScreen
+    participant R as ProxyRepository
+
+    loop 每秒 tick（isActive）
+        VM->>VM: remaining=(deadlineNs-nowNanos())/1e9
+        VM->>U: uiState.countdownSec = max(0, remaining)
+        alt remaining > 0
+            VM->>VM: delay(1000)
+        else remaining <= 0（到期）
+            VM->>R: refreshAwait()（tryLock；被手动刷新占用则立即返回）
+            R-->>VM: Success / Failure
+            VM->>VM: deadlineNs = nowNanos() + intervalSec×1e9（重置倒计时）
+        end
+    end
+
+%% 4.4 抓取失败降级（P0-1/P0-9，保留旧列表）
+sequenceDiagram
+    autonumber
+    participant VM as MainViewModel
+    participant R as ProxyRepository
+    participant F as ProxyFetcher
+    participant U as MainScreen
+
+    VM->>R: refresh(url)
+    R->>F: fetch(url)
+    F--xR: IOException（超时/断网/HTTP 5xx）
+    R-->>VM: Failure("抓取代理列表失败：…")
+    Note over VM: proxies / stats / updatedAt 保持上一轮成功值不变
+    VM->>U: uiState.error = 消息（红色错误条显示）
+    Note over U: 下一轮成功刷新时 error=null，错误条自动清除
+
+%% 4.5 并发 TCP 测试（P0-3，Semaphore(20)）
+sequenceDiagram
+    autonumber
+    participant R as ProxyRepository
+    participant T as ProxyTester
+    participant SEM as Semaphore(20)
+    participant S as java.net.Socket
+
+    R->>T: testAll(entries)（coroutineScope）
+    loop 每个 entry（async + awaitAll 保序）
+        T->>SEM: withPermit
+        alt 获得许可（并发 ≤ 20）
+            T->>S: connect(host, port, 5000ms)
+            alt 成功
+                S-->>T: 往返毫秒 → latencyMs，status=AVAILABLE
+            else 超时/拒绝/错误
+                S-->>T: null → status=UNAVAILABLE
+            end
+        else 超过 20 并发
+            T->>SEM: 挂起等待空位
+        end
+    end
+    T-->>R: List<ProxyEntry>（顺序与输入一致）
+
+%% 4.6 保存间隔与倒计时重置（P0-7）
+sequenceDiagram
+    autonumber
+    participant U as ControlBar
+    participant VM as MainViewModel
+    participant S as SettingsStore
+    participant U2 as MainScreen
+
+    U->>VM: saveIntervalInput(text)
+    alt 非法（非整数/越界/空）
+        VM->>U2: settingsMessage="请输入 1~1440 之间的整数"（错误态，不持久化）
+    else 合法（1~1440）
+        VM->>S: setIntervalMinutes(value)
+        S-->>VM: settings Flow 发射新 Settings
+        VM->>VM: intervalSec 更新 → resetCountdown()（deadline=now+新间隔）
+        VM->>U2: settingsMessage="已保存，立即生效"（成功态）
+        U2->>U2: 倒计时按新间隔重新计时（重启 App 后仍在）
+    end
+
+%% 4.7 复制 / 分享 / MTProto 跳转（P0-5/P1-1/P1-3）
+sequenceDiagram
+    autonumber
+    participant U as ProxyRow
+    participant M as MainScreen
+    participant C as LocalClipboardManager
+    participant I as Intent 系统
+    participant TG as Telegram
+
+    alt SOCKS5 行点击
+        U->>M: onRowClick
+        M->>C: setText(AnnotatedString(entry.link))
+        M->>M: copiedLink=entry.link（图标态 1.5s 后自动清除）
+        M->>M: Snackbar「已复制」
+    else MTProto 行点击
+        U->>M: onRowClick
+        M->>M: toTelegramScheme(link)（t.me→tg://）
+        M->>I: startActivity(ACTION_VIEW, tg://proxy?...)
+        alt Telegram 已安装
+            I->>TG: 拉起代理添加页
+        else ActivityNotFoundException
+            M->>C: setText(link)（降级：自动复制）
+            M->>M: Snackbar「未安装 Telegram，已复制链接」
+        end
+    end
+    opt 长按任意行（P1-3 分享）
+        U->>M: onRowLongClick → AlertDialog
+        M->>I: ACTION_SEND text/plain（createChooser「分享代理链接」）
+    end
+
+%% 4.8 回前台同步与超龄补刷（PRD 5.2）
+sequenceDiagram
+    autonumber
+    participant A as MainActivity
+    participant VM as MainViewModel
+    participant R as ProxyRepository
+
+    A->>VM: onResume → onResumeSync()
+    alt 倒计时 tick 已停（曾在后台）
+        VM->>VM: 重启 tick 循环（保留原 deadline，不重置进度）
+    end
+    alt now >= deadlineNs（距上次成功刷新已超间隔）
+        VM->>R: refresh()（补刷一轮）
+        VM->>VM: deadlineNs = now + intervalSec×1e9
+    else 未超时
+        VM-->>A: 仅恢复倒计时显示
+    end
+    Note over A,VM: onPause：countdownJob.cancel()（省电），deadline 保留

@@ -1,0 +1,188 @@
+%% tgproxy 安卓版 - 数据模型与接口类图（提取自 docs/ARCHITECTURE.md §3.1）
+
+classDiagram
+    direction LR
+
+    class Constants {
+        <<object>>
+        +String DEFAULT_PROXY_LIST_URL$
+        +String USER_AGENT$
+        +Long FETCH_TIMEOUT_MS$
+        +Int TEST_TIMEOUT_MS$
+        +Int TEST_MAX_CONCURRENCY$
+        +Int DEFAULT_INTERVAL_MINUTES$
+        +Int MIN_INTERVAL_MINUTES$
+        +Int MAX_INTERVAL_MINUTES$
+        +Long COPY_FEEDBACK_MS$
+        +Long COUNTDOWN_TICK_MS$
+    }
+
+    class ProxyType {
+        <<enumeration>>
+        SOCKS5
+        MTPROTO
+    }
+    class ProxyStatus {
+        <<enumeration>>
+        AVAILABLE
+        UNAVAILABLE
+    }
+    class ProxyEntry {
+        +String link
+        +String host
+        +Int port
+        +ProxyType type
+        +Int? latencyMs
+        +ProxyStatus status
+        +String location
+        +String isp
+        +String addedAt
+    }
+    class Stats {
+        +Int totalKept
+        +Int available
+        +Int unavailable
+        +Int excluded
+    }
+    class ThemeMode {
+        <<enumeration>>
+        SYSTEM
+        LIGHT
+        DARK
+    }
+    class Settings {
+        +Int intervalMinutes
+        +String proxyListUrl
+        +ThemeMode themeMode
+    }
+    class ProxyUiState {
+        +String? updatedAt
+        +Boolean fetching
+        +String? error
+        +Stats stats
+        +List~ProxyEntry~ proxies
+        +Int countdownSec
+        +Boolean countdownStarted
+        +String? settingsMessage
+        +Boolean settingsMessageIsError
+    }
+
+    class ProxySource {
+        <<interface>>
+        +fetch(url: String) String$
+    }
+    class LatencyTester {
+        <<interface>>
+        +testAll(entries: List~ProxyEntry~) List~ProxyEntry~$
+    }
+    class SettingsStore {
+        <<interface>>
+        +settings: Flow~Settings~
+        +current() Settings$
+        +setIntervalMinutes(value: Int)
+        +setProxyListUrl(value: String)
+        +setThemeMode(mode: ThemeMode)
+    }
+    class TimeSource {
+        <<interface>>
+        +nowNanos() Long$
+    }
+
+    class ProxyParser {
+        +parse(text: String?) ParseResult$
+    }
+    class ParseResult {
+        +List~ProxyEntry~ entries
+        +Int excludedCount
+        +Int droppedCount
+    }
+    class ProxyFetcher {
+        -OkHttpClient client
+        +fetch(url: String) String$
+        +defaultClient() OkHttpClient$
+    }
+    class ProxyTester {
+        -Int maxConcurrency
+        -Int timeoutMs
+        +testAll(entries: List~ProxyEntry~) List~ProxyEntry~$
+        +testOne(host: String, port: Int) Int?
+    }
+    class RefreshResult {
+        <<sealed interface>>
+    }
+    class ProxyRepository {
+        -ProxySource source
+        -LatencyTester tester
+        +refresh(proxyListUrl: String) RefreshResult$
+        +sortProxies(proxies: List~ProxyEntry~) List~ProxyEntry~$
+    }
+    class SettingsRepository {
+        -Context context
+        +settings: Flow~Settings~
+        +current() Settings$
+    }
+
+    class MainViewModel {
+        +uiState: StateFlow~ProxyUiState~
+        +settings: StateFlow~Settings~
+        +refresh()
+        +saveIntervalInput(text: String)
+        +setThemeMode(mode: ThemeMode)
+        +onResumeSync()
+        +onPause()
+        +factory(repository, settingsStore) ViewModelProvider.Factory$
+    }
+    class MainActivity
+    class TgProxyApp
+    class AppContainer
+
+    class MainScreen {
+        <<composable>>
+    }
+    class StatsGrid {
+        <<composable>>
+    }
+    class ErrorBanner {
+        <<composable>>
+    }
+    class ControlBar {
+        <<composable>>
+    }
+    class ProxyListSection {
+        <<composable>>
+    }
+    class ProxyRow {
+        <<composable>>
+    }
+    class Badges {
+        <<composable>>
+    }
+
+    ProxyEntry --> ProxyType
+    ProxyEntry --> ProxyStatus
+    ProxyUiState --> Stats
+    ProxyUiState --> ProxyEntry
+    Settings --> ThemeMode
+    ProxyFetcher ..|> ProxySource
+    ProxyTester ..|> LatencyTester
+    SettingsRepository ..|> SettingsStore
+    ProxyRepository --> ProxySource
+    ProxyRepository --> LatencyTester
+    ProxyRepository ..> RefreshResult
+    ProxyRepository ..> ProxyParser
+    MainViewModel --> ProxyRepository
+    MainViewModel --> SettingsStore
+    MainViewModel --> TimeSource
+    MainViewModel ..> ProxyUiState
+    MainActivity ..> MainViewModel
+    MainActivity ..> TgProxyApp
+    TgProxyApp --> AppContainer
+    AppContainer --> ProxyRepository
+    AppContainer --> SettingsRepository
+    MainScreen ..> MainViewModel
+    MainScreen *-- StatsGrid
+    MainScreen *-- ErrorBanner
+    MainScreen *-- ControlBar
+    MainScreen *-- ProxyListSection
+    ProxyListSection *-- ProxyRow
+    ProxyRow *-- Badges

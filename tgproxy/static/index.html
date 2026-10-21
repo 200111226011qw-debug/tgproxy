@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Telegram 代理管理</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  [hidden] { display: none !important; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: #f4f6fa;
+    color: #1f2937;
+  }
+  .container { max-width: 1120px; margin: 0 auto; padding: 24px 20px 40px; }
+
+  .page-header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    flex-wrap: wrap; gap: 8px; margin-bottom: 18px;
+  }
+  h1 { font-size: 22px; font-weight: 700; }
+  .subtitle { font-size: 13px; color: #6b7280; margin-top: 4px; }
+  .muted { color: #6b7280; font-size: 13px; }
+
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 14px; margin-bottom: 14px;
+  }
+  .stat-card {
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+    padding: 14px 16px; border-left: 4px solid #2563eb;
+  }
+  .stat-card.stat-green { border-left-color: #16a34a; }
+  .stat-card.stat-gray { border-left-color: #9ca3af; }
+  .stat-card.stat-orange { border-left-color: #d97706; }
+  .stat-label { font-size: 13px; color: #6b7280; }
+  .stat-value { font-size: 26px; font-weight: 700; margin-top: 2px; }
+
+  .error-banner {
+    background: #fee2e2; border: 1px solid #fecaca; color: #b91c1c;
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px;
+  }
+
+  .toolbar {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 14px;
+  }
+  .btn {
+    border: 1px solid #d1d5db; background: #fff; color: #1f2937;
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { background: #f9fafb; }
+  .btn:disabled { opacity: .6; cursor: not-allowed; }
+  .btn-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+  .interval-group { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #374151; }
+  .interval-group input {
+    width: 76px; padding: 6px 8px; border: 1px solid #d1d5db;
+    border-radius: 8px; font-size: 13px;
+  }
+  .settings-msg { font-size: 12px; color: #16a34a; }
+  .toolbar-meta { margin-left: auto; }
+
+  .table-wrapper {
+    position: relative; background: #fff; border: 1px solid #e5e7eb;
+    border-radius: 10px; overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; padding: 10px 12px; background: #f9fafb; color: #6b7280;
+    font-weight: 600; font-size: 12px; border-bottom: 1px solid #e5e7eb;
+    white-space: nowrap;
+  }
+  tbody td { padding: 10px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f9fafb; }
+  .empty-row td { text-align: center; color: #9ca3af; padding: 28px 0; }
+
+  .badge {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .badge-available { background: #dcfce7; color: #15803d; }
+  .badge-unavailable { background: #f3f4f6; color: #6b7280; }
+  .badge-socks5 { background: #dbeafe; color: #1d4ed8; }
+  .badge-mtproto { background: #ede9fe; color: #6d28d9; }
+
+  .lat { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+  .lat-green { color: #16a34a; }
+  .lat-orange { color: #d97706; }
+  .lat-red { color: #dc2626; }
+  .lat-none { color: #9ca3af; font-weight: 400; }
+
+  .link-btn {
+    display: inline-flex; align-items: center; gap: 6px; background: none;
+    border: none; padding: 0; font: inherit;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    color: #2563eb; cursor: pointer;
+  }
+  .link-btn:hover { text-decoration: underline; }
+  .link-btn svg { flex: none; }
+  .link-btn.copied { color: #16a34a; }
+
+  .loading-overlay {
+    position: absolute; inset: 0; display: flex; align-items: center;
+    justify-content: center; gap: 10px; background: rgba(255, 255, 255, .75);
+    color: #374151; font-size: 13px;
+  }
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid #d1d5db; border-top-color: #2563eb;
+    border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .page-footer { margin-top: 14px; font-size: 12px; }
+
+  @media (max-width: 720px) {
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    .toolbar-meta { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header class="page-header">
+    <div>
+      <h1>Telegram 代理管理</h1>
+      <p class="subtitle">自动抓取 · 连通性测试 · 仅保留 Telegram 可用代理</p>
+    </div>
+    <span id="updated-at" class="muted">更新时间：--</span>
+  </header>
+
+  <section class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">已保留</div>
+      <div class="stat-value" id="stat-kept">0</div>
+    </div>
+    <div class="stat-card stat-green">
+      <div class="stat-label">可用</div>
+      <div class="stat-value" id="stat-available">0</div>
+    </div>
+    <div class="stat-card stat-gray">
+      <div class="stat-label">不可用</div>
+      <div class="stat-value" id="stat-unavailable">0</div>
+    </div>
+    <div class="stat-card stat-orange">
+      <div class="stat-label">已排除</div>
+      <div class="stat-value" id="stat-excluded">0</div>
+    </div>
+  </section>
+
+  <div class="error-banner" id="error-banner" hidden></div>
+
+  <section class="toolbar">
+    <button id="refresh-btn" class="btn btn-primary" type="button">刷新</button>
+    <div class="interval-group">
+      <label for="interval-input">自动更新间隔（分钟）</label>
+      <input id="interval-input" type="number" min="1" max="1440" step="1" value="10">
+      <button id="save-interval-btn" class="btn" type="button">保存</button>
+      <span id="settings-msg" class="settings-msg"></span>
+    </div>
+    <div class="toolbar-meta">
+      <span id="countdown" class="muted">下次自动更新：--</span>
+    </div>
+  </section>
+
+  <section class="table-wrapper" id="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>状态</th>
+          <th>类型</th>
+          <th>代理地址</th>
+          <th>延迟</th>
+          <th>地区</th>
+          <th>ISP</th>
+          <th>入库时间</th>
+        </tr>
+      </thead>
+      <tbody id="proxy-tbody">
+        <tr class="empty-row"><td colspan="7">正在加载…</td></tr>
+      </tbody>
+    </table>
+    <div class="loading-overlay" id="loading-overlay" hidden>
+      <span class="spinner"></span> 正在抓取并测试代理…
+    </div>
+  </section>
+
+  <footer class="page-footer">
+    <span id="source-url" class="muted"></span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var POLL_INTERVAL_MS = 2500;
+  var state = { settings: null, nextRunAt: null, fetching: false };
+
+  function $(id) { return document.getElementById(id); }
+  var tbody = $("proxy-tbody");
+  var refreshBtn = $("refresh-btn");
+  var loadingOverlay = $("loading-overlay");
+  var errorBanner = $("error-banner");
+  var countdownEl = $("countdown");
+  var updatedAtEl = $("updated-at");
+  var settingsMsg = $("settings-msg");
+
+  var COPY_ICON =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="9" y="9" width="13" height="13" rx="2"></rect>' +
+    '<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+
+  function escapeHtml(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (ch) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+    });
+  }
+
+  function fetchJson(url, options) {
+    return fetch(url, options).then(function (resp) {
+      return resp.json().catch(function () { return {}; });
+    });
+  }
+
+  function formatLatency(ms) {
+    if (ms == null) { return { text: "—", cls: "lat-none" }; }
+    if (ms < 200) { return { text: ms + " ms", cls: "lat-green" }; }
+    if (ms < 600) { return { text: ms + " ms", cls: "lat-orange" }; }
+    return { text: ms + " ms", cls: "lat-red" };
+  }
+
+  function typeBadge(type) {
+    if (type === "mtproto") {
+      return '<span class="badge badge-mtproto">MTProto</span>';
+    }
+    return '<span class="badge badge-socks5">SOCKS5</span>';
+  }
+
+  function renderProxies(proxies) {
+    if (!proxies || !proxies.length) {
+      tbody.innerHTML =
+        '<tr class="empty-row"><td colspan="7">暂无数据，请点击「刷新」或等待自动更新</td></tr>';
+      return;
+    }
+    var html = "";
+    proxies.forEach(function (p) {
+      var lat = formatLatency(p.latency_ms);
+      var statusBadge = p.status === "available"
+        ? '<span class="badge badge-available">可用</span>'
+        : '<span class="badge badge-unavailable">不可用</span>';
+      html += "<tr>" +
+        "<td>" + statusBadge + "</td>" +
+        "<td>" + typeBadge(p.type) + "</td>" +
+        '<td><button type="button" class="link-btn" data-link="' + escapeHtml(p.link) +
+          '" title="点击复制完整链接">' + escapeHtml(p.host + ":" + p.port) + COPY_ICON +
+        "</button></td>" +
+        '<td><span class="lat ' + lat.cls + '">' + lat.text + "</span></td>" +
+        "<td>" + escapeHtml(p.location) + "</td>" +
+        "<td>" + escapeHtml(p.isp) + "</td>" +
+        "<td>" + escapeHtml(p.added_at) + "</td>" +
+        "</tr>";
+    });
+    tbody.innerHTML = html;
+  }
+
+  function renderStats(stats) {
+    stats = stats || {};
+    $("stat-kept").textContent = stats.total_kept || 0;
+    $("stat-available").textContent = stats.available || 0;
+    $("stat-unavailable").textContent = stats.unavailable || 0;
+    $("stat-excluded").textContent = stats.excluded || 0;
+  }
+
+  function renderCountdown() {
+    if (state.nextRunAt == null) {
+      countdownEl.textContent = "下次自动更新：--";
+      return;
+    }
+    var remain = Math.max(0, Math.round((state.nextRunAt - Date.now()) / 1000));
+    var text = remain >= 60
+      ? Math.floor(remain / 60) + " 分 " + (remain % 60) + " 秒"
+      : remain + " 秒";
+    countdownEl.textContent = "下次自动更新：" + text;
+  }
+
+  function render(data) {
+    renderStats(data.stats);
+    renderProxies(data.proxies);
+    updatedAtEl.textContent = "更新时间：" + (data.updated_at || "--");
+    if (data.error) {
+      errorBanner.textContent = data.error;
+      errorBanner.hidden = false;
+    } else {
+      errorBanner.hidden = true;
+    }
+    state.fetching = !!data.fetching;
+    refreshBtn.disabled = state.fetching;
+    refreshBtn.textContent = state.fetching ? "刷新中…" : "刷新";
+    loadingOverlay.hidden = !state.fetching;
+    if (typeof data.next_run_in_sec === "number") {
+      state.nextRunAt = Date.now() + data.next_run_in_sec * 1000;
+      renderCountdown();
+    }
+  }
+
+  function poll() {
+    fetchJson("/api/proxies")
+      .then(render)
+      .catch(function () { /* 服务未就绪时静默，下一轮重试 */ });
+  }
+
+  function setRefreshingUi(refreshing) {
+    refreshBtn.disabled = refreshing;
+    refreshBtn.textContent = refreshing ? "刷新中…" : "刷新";
+    loadingOverlay.hidden = !refreshing;
+  }
+
+  function refresh() {
+    setRefreshingUi(true);
+    fetchJson("/api/refresh", { method: "POST" }).catch(function () {
+      setRefreshingUi(false);
+    });
+  }
+
+  function loadSettings() {
+    fetchJson("/api/settings")
+      .then(function (data) {
+        state.settings = data;
+        $("interval-input").value = data.interval_minutes;
+        $("source-url").textContent = "数据来源：" + data.proxy_list_url;
+      })
+      .catch(function () { /* 忽略，使用输入框默认值 */ });
+  }
+
+  function saveSettings() {
+    var value = parseInt($("interval-input").value, 10);
+    if (isNaN(value) || value < 1 || value > 1440) {
+      settingsMsg.style.color = "#dc2626";
+      settingsMsg.textContent = "请输入 1~1440 之间的整数";
+      return;
+    }
+    fetchJson("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ interval_minutes: value })
+    })
+      .then(function (data) {
+        if (data && data.ok) {
+          settingsMsg.style.color = "#16a34a";
+          settingsMsg.textContent = "已保存，立即生效";
+          if (data.settings) {
+            $("interval-input").value = data.settings.interval_minutes;
+          }
+        } else {
+          settingsMsg.style.color = "#dc2626";
+          settingsMsg.textContent = (data && data.error) || "保存失败";
+        }
+      })
+      .catch(function () {
+        settingsMsg.style.color = "#dc2626";
+        settingsMsg.textContent = "保存失败：网络错误";
+      });
+  }
+
+  function fallbackCopy(text) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+    document.body.removeChild(ta);
+    return ok;
+  }
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard
+        .writeText(text)
+        .then(function () { return true; })
+        .catch(function () { return fallbackCopy(text); });
+    }
+    return Promise.resolve(fallbackCopy(text));
+  }
+
+  tbody.addEventListener("click", function (event) {
+    var btn = event.target.closest ? event.target.closest(".link-btn") : null;
+    if (!btn) { return; }
+    copyText(btn.getAttribute("data-link")).then(function (ok) {
+      var original = btn.innerHTML;
+      btn.classList.add("copied");
+      btn.innerHTML = ok ? "已复制" : "复制失败";
+      setTimeout(function () {
+        btn.innerHTML = original;
+        btn.classList.remove("copied");
+      }, 1500);
+    });
+  });
+
+  refreshBtn.addEventListener("click", refresh);
+  $("save-interval-btn").addEventListener("click", saveSettings);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) { poll(); }
+  });
+
+  setInterval(poll, POLL_INTERVAL_MS);
+  setInterval(renderCountdown, 1000);
+  loadSettings();
+  poll();
+})();
+</script>
+</body>
+</html>
