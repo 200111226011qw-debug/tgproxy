@@ -9,6 +9,9 @@ __pycache__/
 *.pyc
 config.json
 
+# 发行产物（dist/ 仅本地备料，不进仓库）
+version-release-client/dist/
+
 # Android / Gradle（安卓版构建产物）
 .gradle/
 build/
