@@ -34,15 +34,16 @@ fun buildTelegramViewIntent(link: String): Intent =
     Intent(Intent.ACTION_VIEW, Uri.parse(toTelegramScheme(link)))
 
 /**
- * 把任意可用代理转换为 Telegram 可识别的 tg://proxy 添加链接：
- * MTProto 用自带 secret 的分享链接；SOCKS5 用 server+port。Telegram 收到后
- * 直接弹出「添加代理」窗口，全程不经过网页。
+ * 把任意可用代理转换为 Telegram 可识别的添加链接：
+ * MTProto 用自带 secret 的 tg://proxy 分享链接；SOCKS5 必须用 tg://socks
+ * （tg://proxy 缺 secret 会被 Telegram 忽略）。Telegram 收到后直接弹出
+ * 「添加代理」窗口，全程不经过网页。
  */
 fun toTelegramProxyUrl(entry: ProxyEntry): String =
     if (entry.type == ProxyType.MTPROTO) {
         toTelegramScheme(entry.link)
     } else {
-        "tg://proxy?server=" + entry.host + "&port=" + entry.port
+        "tg://socks?server=" + entry.host + "&port=" + entry.port
     }
 
 /**

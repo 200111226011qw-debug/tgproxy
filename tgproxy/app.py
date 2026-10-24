@@ -132,10 +132,14 @@ def open_external_url(url):
 
 
 def telegram_proxy_url(entry):
-    """把可用代理转换为 Telegram 的 tg://proxy 添加链接（MTProto 自带 secret）。"""
+    """把可用代理转换为 Telegram 可识别的深链。
+
+    SOCKS5 必须用 tg://socks（tg://proxy 仅接受带 secret 的 MTProto 链接，
+    缺 secret 会被 Telegram 忽略——表现为点击无反应）。
+    """
     if entry["type"] == "mtproto":
         return entry["link"]
-    return "tg://proxy?server=%s&port=%d" % (entry["host"], entry["port"])
+    return "tg://socks?server=%s&port=%d" % (entry["host"], entry["port"])
 
 
 class RefreshScheduler:

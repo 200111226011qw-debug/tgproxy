@@ -58,11 +58,11 @@ class ProxyLinksTest {
     )
 
     @Test
-    fun `socks5 条目转换为 tg proxy 的 server port 链接`() {
+    fun `socks5 条目转换为 tg socks 的 server port 链接`() {
         val url = toTelegramProxyUrl(
             entry(ProxyType.SOCKS5, "socks5://1.2.3.4:1080", "1.2.3.4", 1080),
         )
-        assertEquals("tg://proxy?server=1.2.3.4&port=1080", url)
+        assertEquals("tg://socks?server=1.2.3.4&port=1080", url)
     }
 
     @Test
