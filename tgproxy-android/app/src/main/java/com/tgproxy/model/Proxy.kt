@@ -34,11 +34,16 @@ data class ProxyEntry(
 /**
  * 统计卡片四项（与桌面版 get_state()["stats"] 字段一致）。
  *
+ * 列表只保留测试可用的代理；不通的在每轮测试后直接剔除。
+ *
+ * @property available 测试通过并保留在列表中的条数
+ * @property dropped 本轮测试不通被剔除的条数
  * @property excluded 已排除数 = 非 Telegram 类型合法条目 + 非法行（excluded_count + dropped_count）
+ * @property tested 本轮参与连通性测试的总条数
  */
 data class Stats(
-    val totalKept: Int = 0,
     val available: Int = 0,
-    val unavailable: Int = 0,
+    val dropped: Int = 0,
     val excluded: Int = 0,
+    val tested: Int = 0,
 )

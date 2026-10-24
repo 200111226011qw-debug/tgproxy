@@ -68,6 +68,11 @@
   .source-link { color: #4b5563; text-decoration: none; word-break: break-all; }
   .source-link:hover { color: #2563eb; text-decoration: underline; }
   .source-note { flex: none; }
+  .tg-btn { font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid #229ed9;
+    color: #229ed9; background: transparent; cursor: pointer; white-space: nowrap; }
+  .tg-btn:hover { background: #229ed9; color: #fff; }
+  .tg-btn:disabled { opacity: 0.6; cursor: default; }
+  .tg-btn.tg-fail { border-color: #dc2626; color: #dc2626; }
   .toolbar-meta { margin-left: auto; }
 
   .table-wrapper {
@@ -140,21 +145,21 @@
   </header>
 
   <section class="stats-grid">
-    <div class="stat-card">
-      <div class="stat-label">已保留</div>
-      <div class="stat-value" id="stat-kept">0</div>
-    </div>
     <div class="stat-card stat-green">
       <div class="stat-label">可用</div>
       <div class="stat-value" id="stat-available">0</div>
     </div>
-    <div class="stat-card stat-gray">
-      <div class="stat-label">不可用</div>
-      <div class="stat-value" id="stat-unavailable">0</div>
-    </div>
     <div class="stat-card stat-orange">
+      <div class="stat-label">不通已剔除</div>
+      <div class="stat-value" id="stat-dropped">0</div>
+    </div>
+    <div class="stat-card stat-gray">
       <div class="stat-label">已排除</div>
       <div class="stat-value" id="stat-excluded">0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">本轮测试</div>
+      <div class="stat-value" id="stat-tested">0</div>
     </div>
   </section>
 
@@ -177,13 +182,13 @@
     <table>
       <thead>
         <tr>
-          <th>状态</th>
           <th>类型</th>
           <th>代理地址</th>
           <th>延迟</th>
           <th>地区</th>
           <th>ISP</th>
           <th>入库时间</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody id="proxy-tbody">
@@ -252,17 +257,13 @@
   function renderProxies(proxies) {
     if (!proxies || !proxies.length) {
       tbody.innerHTML =
-        '<tr class="empty-row"><td colspan="7">暂无数据，请点击「刷新」或等待自动更新</td></tr>';
+        '<tr class="empty-row"><td colspan="7">暂无可用代理，请点击「刷新」或等待自动更新</td></tr>';
       return;
     }
     var html = "";
     proxies.forEach(function (p) {
       var lat = formatLatency(p.latency_ms);
-      var statusBadge = p.status === "available"
-        ? '<span class="badge badge-available">可用</span>'
-        : '<span class="badge badge-unavailable">不可用</span>';
       html += "<tr>" +
-        "<td>" + statusBadge + "</td>" +
         "<td>" + typeBadge(p.type) + "</td>" +
         '<td><button type="button" class="link-btn" data-link="' + escapeHtml(p.link) +
           '" title="点击复制完整链接">' + escapeHtml(p.host + ":" + p.port) + COPY_ICON +
@@ -271,6 +272,9 @@
         "<td>" + escapeHtml(p.location) + "</td>" +
         "<td>" + escapeHtml(p.isp) + "</td>" +
         "<td>" + escapeHtml(p.added_at) + "</td>" +
+        '<td><button type="button" class="tg-btn" data-host="' + escapeHtml(p.host) +
+          '" data-port="' + escapeHtml(p.port) +
+          '" title="唤起 Telegram Desktop 打开添加代理窗口">添加到 Telegram</button></td>' +
         "</tr>";
     });
     tbody.innerHTML = html;
@@ -278,10 +282,10 @@
 
   function renderStats(stats) {
     stats = stats || {};
-    $("stat-kept").textContent = stats.total_kept || 0;
     $("stat-available").textContent = stats.available || 0;
-    $("stat-unavailable").textContent = stats.unavailable || 0;
+    $("stat-dropped").textContent = stats.dropped || 0;
     $("stat-excluded").textContent = stats.excluded || 0;
+    $("stat-tested").textContent = stats.tested || 0;
   }
 
   function renderCountdown() {
@@ -452,6 +456,44 @@
         btn.classList.remove("copied");
       }, 1500);
     });
+  });
+
+  tbody.addEventListener("click", function (event) {
+    var btn = event.target.closest ? event.target.closest(".tg-btn") : null;
+    if (!btn) { return; }
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "唤起中…";
+    fetchJson("/api/open_telegram", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        host: btn.getAttribute("data-host"),
+        port: parseInt(btn.getAttribute("data-port"), 10)
+      })
+    })
+      .then(function (data) {
+        if (data && data.ok) {
+          btn.textContent = "已唤起 Telegram";
+        } else {
+          btn.textContent = (data && data.error) || "唤起失败";
+          btn.classList.add("tg-fail");
+        }
+        setTimeout(function () {
+          btn.textContent = original;
+          btn.disabled = false;
+          btn.classList.remove("tg-fail");
+        }, 2500);
+      })
+      .catch(function () {
+        btn.textContent = "唤起失败";
+        btn.classList.add("tg-fail");
+        setTimeout(function () {
+          btn.textContent = original;
+          btn.disabled = false;
+          btn.classList.remove("tg-fail");
+        }, 2500);
+      });
   });
 
   refreshBtn.addEventListener("click", refresh);

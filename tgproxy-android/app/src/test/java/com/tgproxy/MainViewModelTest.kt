@@ -189,18 +189,19 @@ class MainViewModelTest {
         )
         advanceTimeBy(100)
         assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
-        assertEquals(2, viewModel.uiState.value.proxies.size)
+        // FakeTester：偶数下标可用 → 2 条中 1 条保留（不通已剔除）
+        assertEquals(1, viewModel.uiState.value.proxies.size)
         assertNull(viewModel.uiState.value.error)
         val updatedAt = viewModel.uiState.value.updatedAt
-        val totalKept = viewModel.uiState.value.stats.totalKept
+        val available = viewModel.uiState.value.stats.available
 
         // 失败一轮：旧列表/统计/更新时间保留，仅 error 更新
         source.nextError = IOException("boom")
         viewModel.refresh()
         advanceTimeBy(100)
         assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size * 2, source.calls.get())
-        assertEquals(2, viewModel.uiState.value.proxies.size)
-        assertEquals(totalKept, viewModel.uiState.value.stats.totalKept)
+        assertEquals(1, viewModel.uiState.value.proxies.size)
+        assertEquals(available, viewModel.uiState.value.stats.available)
         assertEquals(updatedAt, viewModel.uiState.value.updatedAt)
         assertEquals("抓取代理列表失败：boom", viewModel.uiState.value.error)
 

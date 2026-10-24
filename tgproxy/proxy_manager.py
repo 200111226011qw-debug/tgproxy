@@ -381,15 +381,16 @@ class ProxyManager:
         if len(merged) > MAX_TOTAL:
             merged = random.sample(merged, MAX_TOTAL)
         tested = self._test_entries(merged)
-        available = sum(1 for item in tested if item["status"] == "available")
+        # 只保留测试通过的代理，不通的直接剔除（跟随源池每轮自动更新）
+        available = [item for item in tested if item["status"] == "available"]
         with self._lock:
-            self._proxies = tested
+            self._proxies = available
             self._sources = sources
             self._stats = {
-                "total_kept": len(tested),
-                "available": available,
-                "unavailable": len(tested) - available,
+                "available": len(available),
+                "dropped": len(tested) - len(available),
                 "excluded": excluded_total + dropped_total,
+                "tested": len(tested),
             }
             self._updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # 部分源失败不视为整体失败；仅全部失败才提示
@@ -398,6 +399,14 @@ class ProxyManager:
                 if len(failures) == len(urls) and urls
                 else None
             )
+
+    def find_entry(self, host, port):
+        """按 host:port 查当前可用列表中的代理（供一键唤起 Telegram），无则返回 None。"""
+        with self._lock:
+            for item in self._proxies:
+                if item["host"] == host and item["port"] == port:
+                    return dict(item)
+        return None
 
     def _test_entries(self, entries):
         """并发 TCP 测试全部代理并回填延迟与状态。"""

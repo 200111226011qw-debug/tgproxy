@@ -58,20 +58,20 @@ class ProxyRepositoryTest {
         assertTrue(result is RefreshResult.Success)
         result as RefreshResult.Success
         val stats = result.stats
-        assertEquals(2, stats.totalKept)
+        // 不通的直接剔除：列表只剩可用条目
         assertEquals(1, stats.available)
-        assertEquals(1, stats.unavailable)
+        assertEquals(1, stats.dropped)
+        assertEquals(2, stats.tested)
         // excluded = 非 Telegram 合法条目(1) + 非法行(1)
         assertEquals(2, stats.excluded)
         assertTrue(result.updatedAt.matches(Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$""")))
-        // entries 保持解析序（测试器保序）
+        // entries 只包含可用条目，保持解析序（测试器保序）
         assertEquals(
-            listOf("socks5://1.2.3.4:1080", "socks5://1.2.3.5:1080"),
+            listOf("socks5://1.2.3.4:1080"),
             result.entries.map { it.link },
         )
         assertEquals(ProxyStatus.AVAILABLE, result.entries[0].status)
         assertEquals(100, result.entries[0].latencyMs)
-        assertEquals(ProxyStatus.UNAVAILABLE, result.entries[1].status)
     }
 
     @Test

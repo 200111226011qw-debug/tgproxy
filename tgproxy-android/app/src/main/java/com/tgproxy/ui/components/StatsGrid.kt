@@ -37,10 +37,10 @@ import com.tgproxy.ui.theme.WarningOrange
 fun StatsGrid(stats: Stats, modifier: Modifier = Modifier) {
     val columns = if (LocalConfiguration.current.screenWidthDp >= 600) 4 else 2
     val cards = listOf(
-        StatsCardData("已保留", stats.totalKept, Primary),
         StatsCardData("可用", stats.available, SuccessGreen),
-        StatsCardData("不可用", stats.unavailable, LatencyNone),
-        StatsCardData("已排除", stats.excluded, WarningOrange),
+        StatsCardData("不通已剔除", stats.dropped, WarningOrange),
+        StatsCardData("已排除", stats.excluded, LatencyNone),
+        StatsCardData("本轮测试", stats.tested, Primary),
     )
     Column(
         modifier = modifier.fillMaxWidth(),

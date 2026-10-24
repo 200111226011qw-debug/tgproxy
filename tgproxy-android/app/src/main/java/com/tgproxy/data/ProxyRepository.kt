@@ -74,15 +74,16 @@ class ProxyRepository(
             }
         }
         val tested = tester.testAll(sampled(merged, Constants.MAX_TOTAL))
-        val available = tested.count { it.status == ProxyStatus.AVAILABLE }
+        // 与桌面版一致：只保留可用的代理，不通的直接剔除（跟随源池每轮自动更新）
+        val availableList = tested.filter { it.status == ProxyStatus.AVAILABLE }
         val stats = Stats(
-            totalKept = tested.size,
-            available = available,
-            unavailable = tested.size - available,
+            available = availableList.size,
+            dropped = tested.size - availableList.size,
             // 与桌面版一致：已排除 = 非 Telegram 类型合法条目 + 非法行
             excluded = excludedCount + droppedCount,
+            tested = tested.size,
         )
-        RefreshResult.Success(tested, stats, nowText())
+        RefreshResult.Success(availableList, stats, nowText())
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

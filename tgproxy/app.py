@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -105,6 +106,23 @@ def save_config(config):
             json.dump(normalize_config(config), fh, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def open_external_url(url):
+    """用系统默认处理程序打开 URL scheme（tg:// 由已安装的 Telegram Desktop 接管）。"""
+    if sys.platform == "win32":
+        os.startfile(url)  # noqa: 仅 Windows 存在
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", url])
+    else:
+        subprocess.Popen(["xdg-open", url])
+
+
+def telegram_proxy_url(entry):
+    """把可用代理转换为 Telegram 的 tg://proxy 添加链接（MTProto 自带 secret）。"""
+    if entry["type"] == "mtproto":
+        return entry["link"]
+    return "tg://proxy?server=%s&port=%d" % (entry["host"], entry["port"])
 
 
 class RefreshScheduler:
@@ -255,10 +273,45 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True})
             elif path == "/api/settings":
                 self._handle_settings_update()
+            elif path == "/api/open_telegram":
+                self._handle_open_telegram()
             else:
                 self._send_json({"ok": False, "error": "Not Found"}, status=404)
         except Exception as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=500)
+
+    def _handle_open_telegram(self):
+        """唤起 Telegram Desktop 打开添加代理窗口（不经过网页）。"""
+        try:
+            body = self._read_json_body()
+        except (ValueError, UnicodeDecodeError):
+            self._send_json({"ok": False, "error": "请求体不是合法 JSON"}, status=400)
+            return
+        host = str(body.get("host") or "").strip()
+        try:
+            port = int(body.get("port"))
+        except (TypeError, ValueError):
+            port = 0
+        if not 1 <= port <= 65535:
+            self._send_json({"ok": False, "error": "端口不合法"}, status=400)
+            return
+        # 只允许唤起当前可用列表里存在的代理，避免任意 URL scheme 注入
+        entry = self.server.manager.find_entry(host, port)
+        if entry is None:
+            self._send_json(
+                {"ok": False, "error": "该代理不在当前可用列表中，请先刷新"}, status=404
+            )
+            return
+        url = telegram_proxy_url(entry)
+        try:
+            open_external_url(url)
+        except OSError:
+            self._send_json(
+                {"ok": False, "error": "无法唤起 Telegram，请确认已安装 Telegram Desktop"},
+                status=500,
+            )
+            return
+        self._send_json({"ok": True, "url": url})
 
     def _handle_settings_update(self):
         try:

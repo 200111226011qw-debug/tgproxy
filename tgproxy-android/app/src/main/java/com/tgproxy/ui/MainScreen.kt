@@ -82,17 +82,13 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    // 行点击：SOCKS5 复制；MTProto 跳转 Telegram（未安装则降级复制 + Snackbar）
+    // 行点击：唤起 Telegram 直接弹出「添加代理」窗口（不经过网页；未安装则降级复制）
     val onRowClick: (ProxyEntry) -> Unit = { entry ->
-        if (entry.type == ProxyType.MTPROTO) {
-            try {
-                context.startActivity(buildTelegramViewIntent(entry.link))
-            } catch (e: ActivityNotFoundException) {
-                copyLink(entry, false)
-                scope.launch { snackbarHostState.showSnackbar("未安装 Telegram，已复制链接") }
-            }
-        } else {
-            copyLink(entry, true)
+        try {
+            context.startActivity(buildTelegramViewIntent(toTelegramProxyUrl(entry)))
+        } catch (e: ActivityNotFoundException) {
+            copyLink(entry, false)
+            scope.launch { snackbarHostState.showSnackbar("未安装 Telegram，已复制链接") }
         }
     }
 

@@ -2,6 +2,8 @@ package com.tgproxy.ui
 
 import android.content.Intent
 import android.net.Uri
+import com.tgproxy.model.ProxyEntry
+import com.tgproxy.model.ProxyType
 
 /**
  * 将代理链接转换为 Telegram 可识别的 tg:// scheme（纯函数，JVM 可测）。
@@ -30,6 +32,18 @@ fun toTelegramScheme(link: String): String {
  */
 fun buildTelegramViewIntent(link: String): Intent =
     Intent(Intent.ACTION_VIEW, Uri.parse(toTelegramScheme(link)))
+
+/**
+ * 把任意可用代理转换为 Telegram 可识别的 tg://proxy 添加链接：
+ * MTProto 用自带 secret 的分享链接；SOCKS5 用 server+port。Telegram 收到后
+ * 直接弹出「添加代理」窗口，全程不经过网页。
+ */
+fun toTelegramProxyUrl(entry: ProxyEntry): String =
+    if (entry.type == ProxyType.MTPROTO) {
+        toTelegramScheme(entry.link)
+    } else {
+        "tg://proxy?server=" + entry.host + "&port=" + entry.port
+    }
 
 /**
  * 构建分享 Intent：ACTION_SEND text/plain + 完整链接，经 createChooser 弹出系统分享面板。
