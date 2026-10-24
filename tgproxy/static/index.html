@@ -61,6 +61,13 @@
     border-radius: 8px; font-size: 13px;
   }
   .settings-msg { font-size: 12px; color: #16a34a; }
+  .source-caption { font-size: 12px; margin-bottom: 4px; }
+  .source-urls { display: flex; flex-direction: column; gap: 2px; }
+  .source-row { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+  .source-dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; flex: none; }
+  .source-link { color: #4b5563; text-decoration: none; word-break: break-all; }
+  .source-link:hover { color: #2563eb; text-decoration: underline; }
+  .source-note { flex: none; }
   .toolbar-meta { margin-left: auto; }
 
   .table-wrapper {
@@ -189,7 +196,8 @@
   </section>
 
   <footer class="page-footer">
-    <span id="source-url" class="muted"></span>
+    <div class="muted source-caption">数据源（GitHub 直连失败时自动走 jsDelivr 镜像）：</div>
+    <div id="source-urls" class="source-urls"><span class="muted">加载中…</span></div>
   </footer>
 </div>
 
@@ -291,6 +299,7 @@
   function render(data) {
     renderStats(data.stats);
     renderProxies(data.proxies);
+    renderSources(data.sources);
     updatedAtEl.textContent = "更新时间：" + (data.updated_at || "--");
     if (data.error) {
       errorBanner.textContent = data.error;
@@ -332,9 +341,49 @@
       .then(function (data) {
         state.settings = data;
         $("interval-input").value = data.interval_minutes;
-        $("source-url").textContent = "数据来源：" + data.proxy_list_url;
+        renderSourceUrls(data.proxy_list_urls || []);
       })
       .catch(function () { /* 忽略，使用输入框默认值 */ });
+  }
+
+  function renderSourceUrls(urls) {
+    var box = $("source-urls");
+    box.innerHTML = "";
+    urls.forEach(function (url, index) {
+      var row = document.createElement("div");
+      row.className = "source-row";
+      var dot = document.createElement("span");
+      dot.className = "source-dot";
+      dot.id = "source-dot-" + index;
+      row.appendChild(dot);
+      var link = document.createElement("a");
+      link.href = url;
+      link.textContent = url.replace(/^https?:\/\//, "");
+      link.target = "_blank";
+      link.rel = "noopener";
+      link.className = "source-link";
+      row.appendChild(link);
+      var note = document.createElement("span");
+      note.className = "source-note muted";
+      note.id = "source-note-" + index;
+      row.appendChild(note);
+      box.appendChild(row);
+    });
+  }
+
+  function renderSources(sources) {
+    (sources || []).forEach(function (src, index) {
+      var dot = $("source-dot-" + index);
+      var note = $("source-note-" + index);
+      if (!dot || !note) { return; }
+      if (src.status === "ok") {
+        dot.style.background = "#16a34a";
+        note.textContent = "成功 " + src.kept + " 条" + (src.via_mirror ? " · 走镜像" : "");
+      } else {
+        dot.style.background = "#dc2626";
+        note.textContent = "失败" + (src.error ? "：" + String(src.error).slice(0, 60) : "");
+      }
+    });
   }
 
   function saveSettings() {

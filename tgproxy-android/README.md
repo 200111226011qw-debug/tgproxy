@@ -6,6 +6,10 @@
 - 架构：单 Activity + Jetpack Compose + Material3 + MVVM（StateFlow 响应式直推，**无本地 HTTP 服务器、无轮询**）
 - minSdk 24 / targetSdk 35 / compileSdk 35，JDK 17
 
+## 数据源
+
+与桌面版一致：内置 6 个免费代理源（monosans / TheSpeedX / hookzof / zevtyardt / proxifly / watchttvv）并发抓取、按 host:port 去重合并；raw.githubusercontent.com 直连失败自动回退 jsDelivr 镜像（cdn / gcore / fastly）；支持裸 `host:port` 行格式；单源 >1000 条、合并 >3000 条随机抽样；设置中的自定义数据源会追加到内置源之后。
+
 ## 构建与运行
 
 ### 方式一：Android Studio（推荐）

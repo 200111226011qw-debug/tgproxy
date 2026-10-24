@@ -49,7 +49,35 @@ class ProxyParser {
 
             val match = LINE_RE.matchEntire(line)
             if (match == null) {
-                droppedCount++
+                // 无 scheme:// 的裸 host:port 行（TheSpeedX / monosans 等列表格式）按 SOCKS5 处理
+                val bare = BARE_RE.matchEntire(line)
+                if (bare == null) {
+                    droppedCount++
+                    continue
+                }
+                val bareHost = bare.groupValues[1]
+                val barePort = bare.groupValues[2]
+                if (parseIpv4(bareHost) == null || parsePort(barePort) == null) {
+                    droppedCount++
+                    continue
+                }
+                val key = bareHost to barePort.toInt()
+                if (key in seenKept) continue
+                seenKept.add(key)
+                val bareMeta = parseMeta(bare.groupValues[3])
+                entries.add(
+                    ProxyEntry(
+                        link = "socks5://$bareHost:$barePort",
+                        host = bareHost,
+                        port = barePort.toInt(),
+                        type = ProxyType.SOCKS5,
+                        latencyMs = null,
+                        status = ProxyStatus.UNAVAILABLE,
+                        location = bareMeta.location,
+                        isp = bareMeta.isp,
+                        addedAt = bareMeta.addedAt,
+                    ),
+                )
                 continue
             }
             val scheme = match.groupValues[1].lowercase()
@@ -256,6 +284,9 @@ class ProxyParser {
     companion object {
         /** 行结构：scheme://rest <空白> meta（等价 _LINE_RE；matchEntire 与 re.match + `.*$` 等价）。 */
         private val LINE_RE = Regex("""([A-Za-z][A-Za-z0-9+.\-]*)://(\S+)\s*(.*)""")
+
+        /** 裸地址行：host:port <空白> meta（等价 _BARE_RE；host 合法性由 parseIpv4 复核）。 */
+        private val BARE_RE = Regex("""([0-9.]+):([0-9]{1,5})\s*(.*)""")
 
         /** 入库时间（等价 _ADDED_AT_RE）。 */
         private val ADDED_AT_RE =

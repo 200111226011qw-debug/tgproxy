@@ -21,3 +21,8 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+
+# PyInstaller（桌面版打包产物）
+dist/
+build/
+*.spec

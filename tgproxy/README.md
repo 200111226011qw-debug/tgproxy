@@ -4,10 +4,10 @@
 
 ## 功能
 
-- **定时抓取与自动更新**：抓取 `https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt`，默认每 10 分钟一轮；间隔 1~1440 分钟可配置，保存即生效并持久化
+- **多源定时抓取与自动更新**：并发抓取 6 个内置免费源（monosans / TheSpeedX / hookzof / zevtyardt / proxifly / watchttvv），按 host:port 去重合并；raw.githubusercontent.com 直连失败自动回退 jsDelivr 镜像（cdn / gcore / fastly）；默认每 10 分钟一轮，间隔 1~1440 分钟可配置，保存即生效并持久化；单源 >1000 条、合并 >3000 条时随机抽样
 - **连通性与延迟测试**：对每个保留代理做 TCP 连接测试（5 秒超时、20 并发），成功记录延迟毫秒数，超时/拒绝判定不可用并过滤
 - **Telegram 适配筛选**：仅保留 SOCKS5 与 MTProto（`t.me/proxy`、`tg://proxy`）链接；排除 HTTP、HTTPS、SS、VMess、VLESS、Trojan 等 Telegram 不可用类型（计入「已排除」统计）
-- **健壮解析**：严格 IPv4 校验（4 段纯数字 0~255，含 `X` 掩码字符的地址直接丢弃）、host:port 去重、注释/空行跳过；提取入库时间、地区、ISP 等元数据
+- **健壮解析**：支持 `scheme://host:port 元数据` 与裸 `host:port` 两种行格式（后者按 SOCKS5 处理）；严格 IPv4 校验（4 段纯数字 0~255，含 `X` 掩码字符的地址直接丢弃）、host:port 去重、注释/空行跳过；提取入库时间、地区、ISP 等元数据
 - **界面**：四项统计（已保留/可用/不可用/已排除）、代理列表按延迟升序、延迟三档着色（<200ms 绿 / <600ms 橙 / 更慢或失败 红灰）、一键复制完整代理链接、手动刷新按钮、下次自动更新倒计时、数据更新时间、抓取失败错误提示条（失败时保留旧列表）
 - **配置持久化**：刷新间隔、数据源地址等保存于 `config.json`（首次运行自动生成，已加入 .gitignore）
 

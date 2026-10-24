@@ -22,9 +22,22 @@
 - 严格 IPv4 校验（丢弃含掩码字符的非法地址）、host:port 去重、元数据提取（入库时间 / 地区 / ISP）
 - 界面：可用代理列表（按延迟升序）、延迟三档着色、一键复制完整链接、手动刷新、自动更新倒计时、错误提示
 
-## 数据源
+## 数据源（多源并发抓取，失败自动回退镜像）
 
-https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt
+内置 6 个免费代理源（均为 SOCKS5，raw.githubusercontent.com 直连失败时自动依次回退 cdn / gcore / fastly 三个 jsDelivr 镜像）：
+
+| 源 | 特点 |
+|---|---|
+| watchttvv/free-proxy-list | 原始源，含入库时间 / 地区 / ISP 元数据，含 MTProto |
+| monosans/proxy-list | 每 30 分钟自动验证更新，质量较高 |
+| TheSpeedX/PROXY-List | 每 6 小时更新，数量适中 |
+| hookzof/socks5_list | 多源聚合大列表 |
+| zevtyardt/proxy-list | 大列表 |
+| proxifly/free-proxy-list | 大列表（socks5:// 前缀格式） |
+
+- 支持两种行格式：`scheme://host:port 元数据` 与裸 `host:port`（无 scheme 的主流列表格式，按 SOCKS5 处理）
+- 各源解析结果按 host:port 全局去重合并；单源超过 1000 条随机抽样，合并超过 3000 条随机抽样，保证单轮刷新控制在分钟级
+- 可通过配置 / API 自定义数据源列表（桌面版 `config.json` 的 `proxy_list_urls`，安卓版在设置中追加自定义源）
 
 ## 快速开始
 

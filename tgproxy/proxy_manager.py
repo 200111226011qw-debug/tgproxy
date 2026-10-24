@@ -1,5 +1,6 @@
 """代理列表抓取、解析、Telegram 适配筛选与连通性测试（仅 Python 标准库）。"""
 
+import random
 import re
 import socket
 import ssl
@@ -10,19 +11,39 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
-DEFAULT_PROXY_LIST_URL = (
-    "https://raw.githubusercontent.com/watchttvv/free-proxy-list/"
-    "refs/heads/main/proxy.txt"
-)
+# 默认数据源（均已实测可用；raw.githubusercontent.com 失败时自动回退 jsDelivr 镜像）
+DEFAULT_PROXY_LIST_URLS = [
+    # 原始源：SOCKS5 + MTProto，带入库时间/地区/ISP 元数据
+    "https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt",
+    # 每 30 分钟自动验证更新，质量较高
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+    # 每 6 小时更新，数量适中
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+    # 多源聚合大列表
+    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+    "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks5.txt",
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+]
 USER_AGENT = "tgproxy/1.0 (local Telegram proxy manager)"
 FETCH_TIMEOUT_SEC = 15
+FETCH_MAX_SOURCES = 8
 TEST_TIMEOUT_SEC = 5.0
-TEST_MAX_WORKERS = 20
+# 免费列表动辄数万条，全量 TCP 测试耗时过久；抽样上限让单轮刷新控制在分钟级
+MAX_PER_SOURCE = 1000
+MAX_TOTAL = 3000
+TEST_MAX_WORKERS = 150
+# raw.githubusercontent.com 直连失败时依次尝试的镜像（按国内可达性排序）
+MIRROR_HOSTS = ("cdn.jsdelivr.net", "gcore.jsdelivr.net", "fastly.jsdelivr.net")
+_RAW_URL_RE = re.compile(
+    r"^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/(?:refs/heads/)?([^/]+)/(.+)$"
+)
 
 # 数据行结构：scheme://host:port <空白> 元数据（入库时间、标签、地区、ISP）
 _LINE_RE = re.compile(
     r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*)://(?P<rest>\S+)\s*(?P<meta>.*)$"
 )
+# 裸地址行：host:port <空白> 元数据（TheSpeedX / monosans 等列表无 scheme，视为 SOCKS5）
+_BARE_RE = re.compile(r"^(?P<host>[0-9.]+):(?P<port>[0-9]{1,5})\s*(?P<meta>.*)$")
 _ADDED_AT_RE = re.compile(r"入库时间[：:]\s*(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})")
 _TAG_RE = re.compile(r"\[[^\]]*\]")
 _IPV4_SEGMENT_RE = re.compile(r"^[0-9]{1,3}$")
@@ -125,12 +146,19 @@ def parse_proxy_text(text):
         if not line or line.startswith("#"):
             continue
         match = _LINE_RE.match(line)
-        if not match:
-            dropped_count += 1
-            continue
-        scheme = match.group("scheme").lower()
-        rest = match.group("rest")
-        meta = _parse_meta(match.group("meta"))
+        if match:
+            scheme = match.group("scheme").lower()
+            rest = match.group("rest")
+            meta = _parse_meta(match.group("meta"))
+        else:
+            # 无 scheme 的裸 host:port 行（主流免费列表格式）按 SOCKS5 处理
+            bare = _BARE_RE.match(line)
+            if not bare:
+                dropped_count += 1
+                continue
+            scheme = "socks5"
+            rest = "%s:%s" % (bare.group("host"), bare.group("port"))
+            meta = _parse_meta(bare.group("meta"))
 
         if _is_mtproto_url(scheme, rest):
             parsed = _parse_mtproto(scheme, rest)
@@ -188,8 +216,20 @@ def parse_proxy_text(text):
     return entries, len(excluded_seen), dropped_count
 
 
-def fetch_proxy_text(url, timeout=FETCH_TIMEOUT_SEC):
-    """抓取代理列表文本；首次失败（含 SSL 异常）时用免验证上下文兜底重试一次。"""
+def mirror_urls(url):
+    """为 raw.githubusercontent.com 地址生成 jsDelivr 镜像候选（按可达性排序）。"""
+    match = _RAW_URL_RE.match(url)
+    if not match:
+        return []
+    user, repo, branch, path = match.groups()
+    return [
+        "https://%s/gh/%s/%s@%s/%s" % (host, user, repo, branch, path)
+        for host in MIRROR_HOSTS
+    ]
+
+
+def _http_get(url, timeout):
+    """单次抓取：先常规 SSL，失败换免验证上下文重试一次。"""
     last_error = None
     for ssl_context in (None, ssl._create_unverified_context()):
         try:
@@ -197,6 +237,20 @@ def fetch_proxy_text(url, timeout=FETCH_TIMEOUT_SEC):
             with urllib.request.urlopen(request, timeout=timeout, context=ssl_context) as response:
                 return response.read().decode("utf-8", errors="replace")
         except Exception as exc:  # 网络环境多样，统一兜底重试一次
+            last_error = exc
+    raise last_error
+
+
+def fetch_proxy_text(url, timeout=FETCH_TIMEOUT_SEC):
+    """抓取代理列表文本；直连失败时自动回退 jsDelivr 镜像。
+
+    返回 (text, via_mirror)。
+    """
+    last_error = None
+    for candidate in [url] + mirror_urls(url):
+        try:
+            return _http_get(candidate, timeout), candidate != url
+        except Exception as exc:
             last_error = exc
     raise last_error
 
@@ -230,21 +284,22 @@ def sort_proxies(proxies):
 
 
 class ProxyManager:
-    """代理状态管理：抓取 -> 筛选 -> 并发测试 -> 供 API 读取。"""
+    """代理状态管理：多源抓取 -> 合并去重 -> 抽样 -> 并发测试 -> 供 API 读取。"""
 
-    def __init__(self, proxy_list_url=DEFAULT_PROXY_LIST_URL):
+    def __init__(self, proxy_list_urls=None):
         self._lock = threading.Lock()
-        self._proxy_list_url = proxy_list_url
+        self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
         self._proxies = []
+        self._sources = []
         self._stats = {"total_kept": 0, "available": 0, "unavailable": 0, "excluded": 0}
         self._updated_at = None
         self._fetching = False
         self._error = None
 
-    def set_proxy_list_url(self, url):
-        """热更新数据源地址（下次刷新生效）。"""
+    def set_proxy_list_urls(self, urls):
+        """热更新数据源列表（下次刷新生效）。"""
         with self._lock:
-            self._proxy_list_url = url
+            self._proxy_list_urls = list(urls) if urls else list(DEFAULT_PROXY_LIST_URLS)
 
     def get_state(self):
         """返回当前完整状态快照（与 /api/proxies 字段一致）。"""
@@ -254,6 +309,7 @@ class ProxyManager:
                 "fetching": self._fetching,
                 "error": self._error,
                 "stats": dict(self._stats),
+                "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
             }
 
@@ -279,27 +335,69 @@ class ProxyManager:
                 self._fetching = False
         return True
 
-    def _run_refresh(self):
+    def _fetch_one(self, url):
+        """抓取单个数据源，返回源状态记录（含文本）。"""
         try:
-            text = fetch_proxy_text(self._proxy_list_url)
+            text, via_mirror = fetch_proxy_text(url)
         except Exception as exc:
-            # 抓取失败：保留旧列表，记录错误，下一周期重试
-            with self._lock:
-                self._error = "抓取代理列表失败：%s" % exc
-            return
-        entries, excluded_count, dropped_count = parse_proxy_text(text)
-        tested = self._test_entries(entries)
+            return {"url": url, "status": "failed", "kept": 0,
+                    "via_mirror": False, "error": str(exc), "text": None}
+        return {"url": url, "status": "ok", "kept": 0,
+                "via_mirror": via_mirror, "error": None, "text": text}
+
+    def _run_refresh(self):
+        urls = list(self._proxy_list_urls)[:FETCH_MAX_SOURCES]
+        sources = []
+        with ThreadPoolExecutor(max_workers=max(1, len(urls))) as executor:
+            fetched = list(executor.map(self._fetch_one, urls))
+
+        merged = []
+        seen = set()
+        excluded_total = 0
+        dropped_total = 0
+        failures = []
+        for item in fetched:
+            record = dict(item)
+            record.pop("text")
+            if item["status"] != "ok":
+                failures.append("%s：%s" % (record["url"], item["error"]))
+                sources.append(record)
+                continue
+            entries, excluded_count, dropped_count = parse_proxy_text(item["text"])
+            if len(entries) > MAX_PER_SOURCE:
+                entries = random.sample(entries, MAX_PER_SOURCE)
+            kept = 0
+            for entry in entries:
+                key = (entry["host"], entry["port"])
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(entry)
+                    kept += 1
+            record["kept"] = kept
+            sources.append(record)
+            excluded_total += excluded_count
+            dropped_total += dropped_count
+
+        if len(merged) > MAX_TOTAL:
+            merged = random.sample(merged, MAX_TOTAL)
+        tested = self._test_entries(merged)
         available = sum(1 for item in tested if item["status"] == "available")
         with self._lock:
             self._proxies = tested
+            self._sources = sources
             self._stats = {
                 "total_kept": len(tested),
                 "available": available,
                 "unavailable": len(tested) - available,
-                "excluded": excluded_count + dropped_count,
+                "excluded": excluded_total + dropped_total,
             }
             self._updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            self._error = None
+            # 部分源失败不视为整体失败；仅全部失败才提示
+            self._error = (
+                "全部 %d 个数据源抓取失败：%s" % (len(urls), failures[0])
+                if len(failures) == len(urls) and urls
+                else None
+            )
 
     def _test_entries(self, entries):
         """并发 TCP 测试全部代理并回填延迟与状态。"""

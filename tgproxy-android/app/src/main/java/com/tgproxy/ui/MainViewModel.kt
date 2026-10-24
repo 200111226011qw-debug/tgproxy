@@ -95,7 +95,7 @@ class MainViewModel(
         if (!refreshMutex.tryLock()) return
         try {
             _uiState.value = _uiState.value.copy(fetching = true, error = null)
-            when (val result = repository.refresh(_settings.value.proxyListUrl)) {
+            when (val result = repository.refresh(resolveUrls(_settings.value))) {
                 is RefreshResult.Success -> {
                     _uiState.value = _uiState.value.copy(
                         proxies = repository.sortProxies(result.entries),
@@ -114,6 +114,12 @@ class MainViewModel(
             refreshMutex.unlock()
         }
     }
+
+    /**
+     * 本轮刷新的数据源列表：内置多源 + 用户自定义源（不与内置重复时追加）。
+     */
+    private fun resolveUrls(settings: Settings): List<String> =
+        (Constants.DEFAULT_PROXY_LIST_URLS + listOfNotNull(settings.proxyListUrl.takeIf { url -> url !in Constants.DEFAULT_PROXY_LIST_URLS },)).distinct().take(Constants.FETCH_MAX_SOURCES)
 
     /**
      * 保存间隔输入：非法（非整数/越界/空）→ 错误提示且不持久化；

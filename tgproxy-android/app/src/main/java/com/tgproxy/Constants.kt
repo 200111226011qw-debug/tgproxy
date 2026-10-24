@@ -6,15 +6,40 @@ package com.tgproxy
  * 本对象为纯 Kotlin，无任何 Android 依赖，可在 JVM 单测中直接引用。
  */
 object Constants {
-    /** 默认数据源地址（桌面版 DEFAULT_PROXY_LIST_URL） */
+    /** 默认数据源地址（桌面版 DEFAULT_PROXY_LIST_URLS[0]，保留供单源设置与旧数据回退） */
     const val DEFAULT_PROXY_LIST_URL =
         "https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt"
+
+    /**
+     * 默认数据源列表（与桌面版 DEFAULT_PROXY_LIST_URLS 一致，均经实测可用；
+     * raw.githubusercontent.com 失败时抓取层自动回退 jsDelivr 镜像）。
+     */
+    val DEFAULT_PROXY_LIST_URLS = listOf(
+        DEFAULT_PROXY_LIST_URL,
+        "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+        "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
+        "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+        "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks5.txt",
+        "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+    )
 
     /** 抓取请求 UA，与桌面版一致 */
     const val USER_AGENT = "tgproxy/1.0 (local Telegram proxy manager)"
 
     /** 抓取超时（OkHttp connect/read 均为此值），等价桌面版 FETCH_TIMEOUT_SEC=15 */
     const val FETCH_TIMEOUT_MS = 15_000L
+
+    /** 同时抓取的数据源上限，等价桌面版 FETCH_MAX_SOURCES=8 */
+    const val FETCH_MAX_SOURCES = 8
+
+    /** 单源解析条目抽样上限，等价桌面版 MAX_PER_SOURCE=1000 */
+    const val MAX_PER_SOURCE = 1000
+
+    /** 单轮测试总条目抽样上限，等价桌面版 MAX_TOTAL=3000 */
+    const val MAX_TOTAL = 3000
+
+    /** raw.githubusercontent.com 直连失败时依次尝试的 jsDelivr 镜像 */
+    val MIRROR_HOSTS = listOf("cdn.jsdelivr.net", "gcore.jsdelivr.net", "fastly.jsdelivr.net")
 
     /** 单次 TCP connect 超时，等价桌面版 TEST_TIMEOUT_SEC=5.0 */
     const val TEST_TIMEOUT_MS = 5_000

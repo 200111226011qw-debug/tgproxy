@@ -203,7 +203,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
 
                 // 页脚：数据来源
                 Text(
-                    text = "数据来源：${settings.proxyListUrl}",
+                    text = "数据源：内置 ${Constants.DEFAULT_PROXY_LIST_URLS.size} 个（直连失败自动走 jsDelivr 镜像）；自定义：${settings.proxyListUrl}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,

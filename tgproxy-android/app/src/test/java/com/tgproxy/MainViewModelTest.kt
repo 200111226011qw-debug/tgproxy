@@ -137,13 +137,13 @@ class MainViewModelTest {
 
             // 推进到抓取被调用并挂起
             advanceTimeBy(100)
-            assertEquals(1, source.calls.get())
+            assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
             assertTrue(viewModel.uiState.value.fetching)
 
             // 放行后完成
             gate.complete(Unit)
             advanceTimeBy(100)
-            assertEquals(1, source.calls.get())
+            assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
             assertFalse(viewModel.uiState.value.fetching)
             assertEquals(1, viewModel.uiState.value.proxies.size)
             assertEquals("socks5://1.2.3.4:1080", viewModel.uiState.value.proxies[0].link)
@@ -162,18 +162,18 @@ class MainViewModelTest {
             timeSource = FakeTimeSource(),
         )
         advanceTimeBy(100)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
 
         // 刷新中重复触发（手动/下拉等价）：不得触发第二轮抓取
         viewModel.refresh()
         viewModel.refresh()
         advanceTimeBy(100)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
         assertTrue(viewModel.uiState.value.fetching)
 
         gate.complete(Unit)
         advanceTimeBy(100)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
         assertFalse(viewModel.uiState.value.fetching)
     }
 
@@ -188,7 +188,7 @@ class MainViewModelTest {
             timeSource = FakeTimeSource(),
         )
         advanceTimeBy(100)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
         assertEquals(2, viewModel.uiState.value.proxies.size)
         assertNull(viewModel.uiState.value.error)
         val updatedAt = viewModel.uiState.value.updatedAt
@@ -198,7 +198,7 @@ class MainViewModelTest {
         source.nextError = IOException("boom")
         viewModel.refresh()
         advanceTimeBy(100)
-        assertEquals(2, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size * 2, source.calls.get())
         assertEquals(2, viewModel.uiState.value.proxies.size)
         assertEquals(totalKept, viewModel.uiState.value.stats.totalKept)
         assertEquals(updatedAt, viewModel.uiState.value.updatedAt)
@@ -209,7 +209,7 @@ class MainViewModelTest {
         source.nextText = "socks5://9.9.9.9:1080"
         viewModel.refresh()
         advanceTimeBy(100)
-        assertEquals(3, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size * 3, source.calls.get())
         assertEquals(1, viewModel.uiState.value.proxies.size)
         assertEquals("socks5://9.9.9.9:1080", viewModel.uiState.value.proxies[0].link)
         assertNull(viewModel.uiState.value.error)
@@ -261,12 +261,12 @@ class MainViewModelTest {
             timeSource = time,
         )
         advanceTimeBy(100)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
 
         // 越过默认间隔 10 分钟后再推进一个 tick
         time.nowNs += 601_000_000_000L
         advanceTimeBy(1_100)
-        assertEquals(2, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size * 2, source.calls.get())
         assertFalse(viewModel.uiState.value.fetching)
     }
 
@@ -280,18 +280,18 @@ class MainViewModelTest {
             timeSource = time,
         )
         advanceTimeBy(100)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
 
         // 退后台：tick 停止；时间越过间隔也不刷新
         viewModel.onPause()
         time.nowNs += 601_000_000_000L
         advanceTimeBy(5_000)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
 
         // 回前台：超龄 → 补刷一轮
         viewModel.onResumeSync()
         advanceTimeBy(100)
-        assertEquals(2, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size * 2, source.calls.get())
         assertFalse(viewModel.uiState.value.fetching)
     }
 
@@ -305,14 +305,14 @@ class MainViewModelTest {
             timeSource = time,
         )
         advanceTimeBy(100)
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
 
         viewModel.onPause()
         time.nowNs += 60_000_000_000L // 仅过去 1 分钟，未超 10 分钟间隔
         viewModel.onResumeSync()
         advanceTimeBy(100)
 
-        assertEquals(1, source.calls.get())
+        assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
         assertTrue(viewModel.uiState.value.countdownStarted)
     }
 

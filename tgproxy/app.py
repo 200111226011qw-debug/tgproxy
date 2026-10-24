@@ -9,17 +9,23 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from proxy_manager import DEFAULT_PROXY_LIST_URL, ProxyManager
+from proxy_manager import DEFAULT_PROXY_LIST_URLS, ProxyManager
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# PyInstaller 冻结运行时：可执行文件目录存配置，解包目录（_MEIPASS）取静态资源
+if getattr(sys, "frozen", False):
+    BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    STATIC_DIR = os.path.join(getattr(sys, "_MEIPASS", BASE_DIR), "static")
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    STATIC_DIR = os.path.join(BASE_DIR, "static")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-STATIC_DIR = os.path.join(BASE_DIR, "static")
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 
 DEFAULT_PORT = 8765
 MAX_PORT_OFFSET = 50
 MIN_INTERVAL_MINUTES = 1
 MAX_INTERVAL_MINUTES = 1440
+MAX_PROXY_LIST_URLS = 20
 
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -34,6 +40,22 @@ MIME_TYPES = {
 }
 
 
+def normalize_proxy_list_urls(value):
+    """校正数据源列表：接受字符串列表 / 单个字符串（旧配置），过滤非法项并去重。"""
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return list(DEFAULT_PROXY_LIST_URLS)
+    cleaned = []
+    for item in value:
+        url = str(item or "").strip()
+        if url.startswith(("http://", "https://")) and url not in cleaned:
+            cleaned.append(url)
+        if len(cleaned) >= MAX_PROXY_LIST_URLS:
+            break
+    return cleaned or list(DEFAULT_PROXY_LIST_URLS)
+
+
 def normalize_config(config):
     """校正配置项类型与取值范围。"""
     try:
@@ -44,8 +66,11 @@ def normalize_config(config):
         MIN_INTERVAL_MINUTES, min(MAX_INTERVAL_MINUTES, interval)
     )
 
-    url = str(config.get("proxy_list_url") or "").strip() or DEFAULT_PROXY_LIST_URL
-    config["proxy_list_url"] = url
+    # 旧版单源键 proxy_list_url 迁移为 proxy_list_urls
+    urls = config.pop("proxy_list_url", None)
+    if config.get("proxy_list_urls") is None:
+        config["proxy_list_urls"] = urls
+    config["proxy_list_urls"] = normalize_proxy_list_urls(config.get("proxy_list_urls"))
 
     try:
         port = int(config.get("port", DEFAULT_PORT))
@@ -59,7 +84,7 @@ def load_config():
     """读取 config.json，不存在或损坏时回退默认值。"""
     config = {
         "interval_minutes": 10,
-        "proxy_list_url": DEFAULT_PROXY_LIST_URL,
+        "proxy_list_urls": list(DEFAULT_PROXY_LIST_URLS),
         "port": DEFAULT_PORT,
     }
     if os.path.isfile(CONFIG_PATH):
@@ -134,19 +159,19 @@ class TgProxyServer(ThreadingHTTPServer):
         """对外暴露的设置（与实际监听端口一致）。"""
         return {
             "interval_minutes": self.settings["interval_minutes"],
-            "proxy_list_url": self.settings["proxy_list_url"],
+            "proxy_list_urls": list(self.settings["proxy_list_urls"]),
             "port": self.server_address[1],
         }
 
-    def update_settings(self, interval_minutes=None, proxy_list_url=None):
+    def update_settings(self, interval_minutes=None, proxy_list_urls=None):
         """更新设置：立即生效并持久化到 config.json。"""
         if interval_minutes is not None:
             self.settings["interval_minutes"] = interval_minutes
             if self.scheduler is not None:
                 self.scheduler.set_interval_minutes(interval_minutes)
-        if proxy_list_url is not None:
-            self.settings["proxy_list_url"] = proxy_list_url
-            self.manager.set_proxy_list_url(proxy_list_url)
+        if proxy_list_urls is not None:
+            self.settings["proxy_list_urls"] = proxy_list_urls
+            self.manager.set_proxy_list_urls(proxy_list_urls)
         save_config(self.settings)
         return self.public_settings()
 
@@ -267,19 +292,43 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         url = body.get("proxy_list_url")
         if url is not None:
-            url = str(url).strip()
-            if not url.startswith(("http://", "https://")):
+            # 兼容旧版单源设置：字符串转单元素列表
+            body["proxy_list_urls"] = [url]
+
+        urls_body = body.get("proxy_list_urls")
+        if urls_body is not None:
+            if isinstance(urls_body, str):
+                urls_body = [urls_body]
+            if not isinstance(urls_body, list) or not urls_body:
                 self._send_json(
-                    {
-                        "ok": False,
-                        "error": "proxy_list_url 必须以 http:// 或 https:// 开头",
-                    },
+                    {"ok": False, "error": "proxy_list_urls 必须是非空的 URL 数组"},
                     status=400,
                 )
                 return
+            urls = []
+            for item in urls_body:
+                url = str(item).strip()
+                if not url.startswith(("http://", "https://")):
+                    self._send_json(
+                        {
+                            "ok": False,
+                            "error": "proxy_list_urls 中每一项都必须以 http:// 或 https:// 开头",
+                        },
+                        status=400,
+                    )
+                    return
+                if url not in urls:
+                    urls.append(url)
+            if len(urls) > MAX_PROXY_LIST_URLS:
+                self._send_json(
+                    {"ok": False, "error": "数据源最多 %d 个" % MAX_PROXY_LIST_URLS},
+                    status=400,
+                )
+                return
+            urls_body = urls
 
         settings = self.server.update_settings(
-            interval_minutes=interval, proxy_list_url=url
+            interval_minutes=interval, proxy_list_urls=urls_body
         )
         self._send_json({"ok": True, "settings": settings})
 
@@ -300,7 +349,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def main():
     config = load_config()
-    manager = ProxyManager(config["proxy_list_url"])
+    manager = ProxyManager(config["proxy_list_urls"])
     server, port = create_server(ApiHandler, manager, config)
     config["port"] = port
     save_config(config)

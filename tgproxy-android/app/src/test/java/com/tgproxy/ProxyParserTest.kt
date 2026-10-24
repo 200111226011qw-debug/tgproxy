@@ -165,13 +165,29 @@ class ProxyParserTest {
     }
 
     @Test
-    fun `无 scheme 分隔符的行被丢弃`() {
+    fun `裸 host port 行按 SOCKS5 保留，无 // 的 scheme 行仍被丢弃`() {
         val text = "1.2.3.4:1080\nsocks5:1.2.3.4:1080"
         val result = parser.parse(text)
 
-        assertEquals(0, result.entries.size)
+        assertEquals(1, result.entries.size)
         assertEquals(0, result.excludedCount)
-        assertEquals(2, result.droppedCount)
+        assertEquals(1, result.droppedCount)
+        val entry = result.entries[0]
+        assertEquals("socks5://1.2.3.4:1080", entry.link)
+        assertEquals(ProxyType.SOCKS5, entry.type)
+    }
+
+    @Test
+    fun `裸 host port 行支持元数据与去重`() {
+        val text = "1.2.3.4:1080 日本 — IIJ\n" +
+            "1.2.3.4:1080 美国 — AWS\n" +
+            "5.6.7.8:9050"
+        val result = parser.parse(text)
+
+        assertEquals(2, result.entries.size)
+        assertEquals(0, result.droppedCount)
+        assertEquals("日本", result.entries[0].location)
+        assertEquals("IIJ", result.entries[0].isp)
     }
 
     @Test
