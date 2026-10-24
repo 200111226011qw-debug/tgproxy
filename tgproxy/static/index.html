@@ -146,20 +146,20 @@
 
   <section class="stats-grid">
     <div class="stat-card stat-green">
-      <div class="stat-label">可用</div>
+      <div class="stat-label">可用（TG 实测通过）</div>
       <div class="stat-value" id="stat-available">0</div>
     </div>
     <div class="stat-card stat-orange">
+      <div class="stat-label">TCP 通但 TG 不通</div>
+      <div class="stat-value" id="stat-tg-failed">0</div>
+    </div>
+    <div class="stat-card stat-gray">
       <div class="stat-label">不通已剔除</div>
       <div class="stat-value" id="stat-dropped">0</div>
     </div>
-    <div class="stat-card stat-gray">
+    <div class="stat-card">
       <div class="stat-label">已排除</div>
       <div class="stat-value" id="stat-excluded">0</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">本轮测试</div>
-      <div class="stat-value" id="stat-tested">0</div>
     </div>
   </section>
 
@@ -262,13 +262,18 @@
     }
     var html = "";
     proxies.forEach(function (p) {
-      var lat = formatLatency(p.latency_ms);
+      // 优先展示 TG 实测延迟（经代理访问 desktop.telegram.org 的往返耗时）
+      var tgLat = p.tg_latency_ms;
+      var lat = (tgLat != null)
+        ? formatLatency(tgLat)
+        : formatLatency(p.latency_ms);
+      var latTitle = (tgLat != null) ? "TG 实测延迟" : "TCP 连接延迟";
       html += "<tr>" +
         "<td>" + typeBadge(p.type) + "</td>" +
         '<td><button type="button" class="link-btn" data-link="' + escapeHtml(p.link) +
           '" title="点击复制完整链接">' + escapeHtml(p.host + ":" + p.port) + COPY_ICON +
         "</button></td>" +
-        '<td><span class="lat ' + lat.cls + '">' + lat.text + "</span></td>" +
+        '<td><span class="lat ' + lat.cls + '" title="' + latTitle + '">' + lat.text + "</span></td>" +
         "<td>" + escapeHtml(p.location) + "</td>" +
         "<td>" + escapeHtml(p.isp) + "</td>" +
         "<td>" + escapeHtml(p.added_at) + "</td>" +
@@ -283,9 +288,9 @@
   function renderStats(stats) {
     stats = stats || {};
     $("stat-available").textContent = stats.available || 0;
+    $("stat-tg-failed").textContent = stats.tg_failed || 0;
     $("stat-dropped").textContent = stats.dropped || 0;
     $("stat-excluded").textContent = stats.excluded || 0;
-    $("stat-tested").textContent = stats.tested || 0;
   }
 
   function renderCountdown() {

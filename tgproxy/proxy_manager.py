@@ -4,6 +4,7 @@ import random
 import re
 import socket
 import ssl
+import struct
 import threading
 import time
 import urllib.request
@@ -32,6 +33,14 @@ TEST_TIMEOUT_SEC = 5.0
 MAX_PER_SOURCE = 1000
 MAX_TOTAL = 3000
 TEST_MAX_WORKERS = 150
+# TG 实测：通过 SOCKS5 代理真实访问 Telegram，验证节点能否连通 Telegram
+# 1) Telegram 数据中心（客户端收发消息实际走的线路）  2) Telegram 站点全链路（TLS+HTTP）
+TELEGRAM_DC_HOST = "149.154.167.51"
+TELEGRAM_DC_PORT = 443
+TELEGRAM_TEST_HOST = "desktop.telegram.org"
+TELEGRAM_TEST_PORT = 443
+TG_TEST_TIMEOUT_SEC = 8.0
+TG_TEST_MAX_WORKERS = 100
 # raw.githubusercontent.com 直连失败时依次尝试的镜像（按国内可达性排序）
 MIRROR_HOSTS = ("cdn.jsdelivr.net", "gcore.jsdelivr.net", "fastly.jsdelivr.net")
 _RAW_URL_RE = re.compile(
@@ -269,13 +278,125 @@ def test_tcp_latency(host, port, timeout=TEST_TIMEOUT_SEC):
     return int(round((time.perf_counter() - started) * 1000))
 
 
+def _recv_exact(sock, count):
+    """精确读取 count 字节，连接提前关闭抛 OSError。"""
+    data = b""
+    while len(data) < count:
+        chunk = sock.recv(count - len(data))
+        if not chunk:
+            raise OSError("connection closed")
+        data += chunk
+    return data
+
+
+def _socks5_connect(sock, target_host, target_port, timeout):
+    """在已连接的套接字上完成 SOCKS5 无认证握手与 CONNECT，失败抛 OSError。
+
+    域名目标用 ATYP=3 由代理端解析（避免本地 DNS 污染）；IP 目标用 ATYP=1。
+    """
+    sock.settimeout(timeout)
+    sock.sendall(b"\x05\x01\x00")
+    if _recv_exact(sock, 2) != b"\x05\x00":
+        raise OSError("socks5 handshake rejected")
+    try:
+        ip = socket.inet_aton(target_host)
+        payload = b"\x05\x01\x00\x01" + ip + struct.pack(">H", target_port)
+    except OSError:
+        target = target_host.encode("idna")
+        payload = (
+            b"\x05\x01\x00\x03" + bytes([len(target)]) + target
+            + struct.pack(">H", target_port)
+        )
+    sock.sendall(payload)
+    reply = _recv_exact(sock, 4)
+    if reply[1] != 0:  # reply code 非 0x00（如 0x01 通用失败 / 0x02 不允许）
+        raise OSError("socks5 connect failed: %d" % reply[1])
+    atyp = reply[3]
+    if atyp == 1:
+        _recv_exact(sock, 6)
+    elif atyp == 3:
+        _recv_exact(sock, 1 + _recv_exact(sock, 1)[0] + 2)
+    elif atyp == 4:
+        _recv_exact(sock, 18)
+    else:
+        raise OSError("socks5 bad atyp %d" % atyp)
+
+
+def test_socks5_telegram_dc(host, port, timeout=TG_TEST_TIMEOUT_SEC,
+                            dc_host=TELEGRAM_DC_HOST, dc_port=TELEGRAM_DC_PORT):
+    """经代理 CONNECT Telegram 数据中心 IP，返回往返毫秒；不通返回 None。"""
+    started = time.perf_counter()
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except (OSError, ValueError):
+        return None
+    try:
+        _socks5_connect(sock, dc_host, dc_port, timeout)
+        return int(round((time.perf_counter() - started) * 1000))
+    except (OSError, ValueError):
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
+def test_telegram_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
+                             target_host=TELEGRAM_TEST_HOST,
+                             target_port=TELEGRAM_TEST_PORT):
+    """TG 实测：节点须同时打通 Telegram 数据中心与站点，返回站点往返毫秒；不通返回 None。
+
+    流程：代理 -> Telegram DC（CONNECT，验证客户端线路）；
+    再建一条代理 -> desktop.telegram.org（CONNECT + TLS 证书校验 + HTTP 状态行，
+    验证全链路可用、无劫持）。
+    """
+    started = time.perf_counter()
+    if test_socks5_telegram_dc(host, port, timeout) is None:
+        return None
+    try:
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except (OSError, ValueError):
+        return None
+    try:
+        _socks5_connect(sock, target_host, target_port, timeout)
+        # 隧道建好，套 TLS 并发一次真实 HTTP 请求
+        tls_sock = ssl.create_default_context().wrap_socket(
+            sock, server_hostname=target_host
+        )
+        try:
+            tls_sock.sendall(
+                (
+                    "GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\n"
+                    "Connection: close\r\n\r\n" % (target_host, USER_AGENT)
+                ).encode()
+            )
+            status = tls_sock.recv(64)
+        finally:
+            try:
+                tls_sock.close()
+            except OSError:
+                pass
+        if not status.startswith(b"HTTP/"):
+            return None
+        return int(round((time.perf_counter() - started) * 1000))
+    except (OSError, ValueError):
+        return None
+    finally:
+        try:
+            sock.close()
+        except OSError:
+            pass
+
+
 def sort_proxies(proxies):
-    """可用在前按延迟升序，不可用分组在后。"""
+    """TG 实测通过的在前按 TG 延迟升序，未验证的（MTProto）分组在后。"""
     def sort_key(item):
-        latency = item.get("latency_ms")
+        tg_ok = item.get("tg_ok")
+        tg_latency = item.get("tg_latency_ms")
         return (
-            0 if item.get("status") == "available" else 1,
-            latency if latency is not None else float("inf"),
+            0 if tg_ok else 1,
+            tg_latency if tg_latency is not None else float("inf"),
             str(item.get("host") or ""),
             int(item.get("port") or 0),
         )
@@ -381,16 +502,21 @@ class ProxyManager:
         if len(merged) > MAX_TOTAL:
             merged = random.sample(merged, MAX_TOTAL)
         tested = self._test_entries(merged)
-        # 只保留测试通过的代理，不通的直接剔除（跟随源池每轮自动更新）
-        available = [item for item in tested if item["status"] == "available"]
+        # 第一阶段：TCP 通的才进入第二阶段
+        tcp_ok = [item for item in tested if item["status"] == "available"]
+        # 第二阶段：TG 实测——经代理真实访问 desktop.telegram.org，不通的剔除
+        verified = self._test_telegram_entries(tcp_ok)
+        kept = [item for item in verified if item["tg_ok"] is not False]
+        tg_failed = len(verified) - len(kept)
+        dropped = len(tested) - len(tcp_ok)
         with self._lock:
-            self._proxies = available
+            self._proxies = kept
             self._sources = sources
             self._stats = {
-                "available": len(available),
-                "dropped": len(tested) - len(available),
+                "available": len(kept),
+                "tg_failed": tg_failed,
+                "dropped": dropped,
                 "excluded": excluded_total + dropped_total,
-                "tested": len(tested),
             }
             self._updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # 部分源失败不视为整体失败；仅全部失败才提示
@@ -407,6 +533,35 @@ class ProxyManager:
                 if item["host"] == host and item["port"] == port:
                     return dict(item)
         return None
+
+    def _test_telegram_entries(self, entries):
+        """并发 TG 实测：仅 SOCKS5 参与；MTProto 不适用（tg_ok=None 原样保留）。"""
+        if not entries:
+            return []
+        results = [None] * len(entries)
+        with ThreadPoolExecutor(max_workers=TG_TEST_MAX_WORKERS) as executor:
+            futures = {
+                executor.submit(
+                    test_telegram_via_socks5, entry["host"], entry["port"]
+                ): index
+                for index, entry in enumerate(entries)
+                if entry["type"] == "socks5"
+            }
+            tested = set()
+            for future, index in futures.items():
+                entry = dict(entries[index])
+                latency = future.result()
+                entry["tg_ok"] = latency is not None
+                entry["tg_latency_ms"] = latency
+                results[index] = entry
+                tested.add(index)
+            for index, entry in enumerate(entries):
+                if index not in tested:
+                    item = dict(entry)
+                    item["tg_ok"] = None
+                    item["tg_latency_ms"] = None
+                    results[index] = item
+        return [item for item in results if item is not None]
 
     def _test_entries(self, entries):
         """并发 TCP 测试全部代理并回填延迟与状态。"""

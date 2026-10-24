@@ -5,7 +5,8 @@
 ## 功能
 
 - **多源定时抓取与自动更新**：并发抓取 6 个内置免费源（monosans / TheSpeedX / hookzof / zevtyardt / proxifly / watchttvv），按 host:port 去重合并；raw.githubusercontent.com 直连失败自动回退 jsDelivr 镜像（cdn / gcore / fastly）；默认每 10 分钟一轮，间隔 1~1440 分钟可配置，保存即生效并持久化；单源 >1000 条、合并 >3000 条时随机抽样
-- **连通性与延迟测试、自动剔除**：对每个候选代理做 TCP 连接测试（5 秒超时、150 并发），测试不通的直接从列表剔除；每轮刷新重新抓取源池并重测，列表始终只保留当前可用节点
+- **两阶段实测与自动剔除**：第一阶段 TCP 连通性测试（5 秒超时、150 并发）剔除死节点；第二阶段 **TG 实测**——经 SOCKS5 代理 CONNECT Telegram 数据中心（149.154.167.51:443，客户端实际收发消息的线路），再全链路访问 `desktop.telegram.org`（TLS 证书校验 + HTTP，验证无劫持），两关都通过才保留；每轮刷新重新抓取源池并重测，列表始终只保留当前可用的节点
+- **按实测延迟排序**：列表按 TG 实测往返延迟升序，越靠前越快
 - **一键唤起 Telegram Desktop**：列表内点「添加到 Telegram」直接通过 `tg://proxy` 协议唤起本机 Telegram Desktop 弹出添加代理窗口（SOCKS5 自动构造 server/port 链接，MTProto 自带 secret），全程不跳网页；接口为 `POST /api/open_telegram`，仅允许唤起当前可用列表中的代理
 - **Telegram 适配筛选**：仅保留 SOCKS5 与 MTProto（`t.me/proxy`、`tg://proxy`）链接；排除 HTTP、HTTPS、SS、VMess、VLESS、Trojan 等 Telegram 不可用类型（计入「已排除」统计）
 - **健壮解析**：支持 `scheme://host:port 元数据` 与裸 `host:port` 两种行格式（后者按 SOCKS5 处理）；严格 IPv4 校验（4 段纯数字 0~255，含 `X` 掩码字符的地址直接丢弃）、host:port 去重、注释/空行跳过；提取入库时间、地区、ISP 等元数据
