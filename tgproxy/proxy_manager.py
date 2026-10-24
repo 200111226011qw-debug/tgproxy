@@ -1,6 +1,8 @@
 """代理列表抓取、解析、Telegram 适配筛选与连通性测试（仅 Python 标准库）。"""
 
 import json
+import json
+import os
 import random
 import re
 import socket
@@ -43,6 +45,8 @@ TELEGRAM_TEST_HOST = "desktop.telegram.org"
 TELEGRAM_TEST_PORT = 443
 TG_TEST_TIMEOUT_SEC = 8.0
 TG_TEST_MAX_WORKERS = 100
+# 单节点 TG 实测总预算（秒）：两关串行共享，防个别节点拖垮整轮
+TG_TEST_DEADLINE_SEC = 20.0
 # TG 实测延迟门槛：超过该值视为「太慢不可用」剔除（默认 1s；界面可调 500~60000）
 TG_LATENCY_LIMIT_MS = 1000
 # raw.githubusercontent.com 直连失败时依次尝试的镜像（按国内可达性排序）
@@ -198,7 +202,7 @@ def crawl_extract(text):
     if stripped[:1] in ("{", "["):
         try:
             _crawl_from_json(json.loads(stripped), entries, seen)
-        except ValueError:
+        except (ValueError, RecursionError):  # 非法 JSON 或深层嵌套递归爆栈
             pass
         if entries:
             return entries
@@ -325,16 +329,10 @@ def mirror_urls(url):
 
 
 def _http_get(url, timeout):
-    """单次抓取：先常规 SSL，失败换免验证上下文重试一次。"""
-    last_error = None
-    for ssl_context in (None, ssl._create_unverified_context()):
-        try:
-            request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(request, timeout=timeout, context=ssl_context) as response:
-                return response.read().decode("utf-8", errors="replace")
-        except Exception as exc:  # 网络环境多样，统一兜底重试一次
-            last_error = exc
-    raise last_error
+    """单次抓取（严格证书校验，不做免验证降级，防中间人投毒代理列表）。"""
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
 def fetch_proxy_text(url, timeout=FETCH_TIMEOUT_SEC):
@@ -365,10 +363,15 @@ def test_tcp_latency(host, port, timeout=TEST_TIMEOUT_SEC):
     return int(round((time.perf_counter() - started) * 1000))
 
 
-def _recv_exact(sock, count):
-    """精确读取 count 字节，连接提前关闭抛 OSError。"""
+def _recv_exact(sock, count, deadline):
+    """精确读取 count 字节；每次读取前按 deadline 收紧 socket 超时，
+    连接提前关闭或超预算抛 OSError。"""
     data = b""
     while len(data) < count:
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            raise OSError("deadline exceeded")
+        sock.settimeout(remaining)
         chunk = sock.recv(count - len(data))
         if not chunk:
             raise OSError("connection closed")
@@ -376,14 +379,14 @@ def _recv_exact(sock, count):
     return data
 
 
-def _socks5_connect(sock, target_host, target_port, timeout):
+def _socks5_connect(sock, target_host, target_port, deadline):
     """在已连接的套接字上完成 SOCKS5 无认证握手与 CONNECT，失败抛 OSError。
 
     域名目标用 ATYP=3 由代理端解析（避免本地 DNS 污染）；IP 目标用 ATYP=1。
+    deadline 为 time.perf_counter() 基准的绝对时限，逐步骤收紧 socket 超时。
     """
-    sock.settimeout(timeout)
     sock.sendall(b"\x05\x01\x00")
-    if _recv_exact(sock, 2) != b"\x05\x00":
+    if _recv_exact(sock, 2, deadline) != b"\x05\x00":
         raise OSError("socks5 handshake rejected")
     try:
         ip = socket.inet_aton(target_host)
@@ -395,30 +398,35 @@ def _socks5_connect(sock, target_host, target_port, timeout):
             + struct.pack(">H", target_port)
         )
     sock.sendall(payload)
-    reply = _recv_exact(sock, 4)
+    reply = _recv_exact(sock, 4, deadline)
     if reply[1] != 0:  # reply code 非 0x00（如 0x01 通用失败 / 0x02 不允许）
         raise OSError("socks5 connect failed: %d" % reply[1])
     atyp = reply[3]
     if atyp == 1:
-        _recv_exact(sock, 6)
+        _recv_exact(sock, 6, deadline)
     elif atyp == 3:
-        _recv_exact(sock, 1 + _recv_exact(sock, 1)[0] + 2)
+        one = _recv_exact(sock, 1, deadline)
+        _recv_exact(sock, 1 + one[0] + 2, deadline)
     elif atyp == 4:
-        _recv_exact(sock, 18)
+        _recv_exact(sock, 18, deadline)
     else:
         raise OSError("socks5 bad atyp %d" % atyp)
 
 
 def test_socks5_telegram_dc(host, port, timeout=TG_TEST_TIMEOUT_SEC,
                             dc_host=TELEGRAM_DC_HOST, dc_port=TELEGRAM_DC_PORT):
-    """经代理 CONNECT Telegram 数据中心 IP，返回往返毫秒；不通返回 None。"""
+    """经代理 CONNECT Telegram 数据中心 IP，返回往返毫秒；不通返回 None。
+
+    timeout 为本关总预算（秒）：连接、握手、CONNECT 共享同一个 deadline。
+    """
     started = time.perf_counter()
+    deadline = started + timeout
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
     except (OSError, ValueError):
         return None
     try:
-        _socks5_connect(sock, dc_host, dc_port, timeout)
+        _socks5_connect(sock, dc_host, dc_port, deadline)
         return int(round((time.perf_counter() - started) * 1000))
     except (OSError, ValueError):
         return None
@@ -438,13 +446,18 @@ def test_telegram_web_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
     验证全链路可用、无劫持）。
     """
     started = time.perf_counter()
+    deadline = started + timeout
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
     except (OSError, ValueError):
         return None
     try:
-        _socks5_connect(sock, target_host, target_port, timeout)
-        # 隧道建好，套 TLS 并发一次真实 HTTP 请求
+        _socks5_connect(sock, target_host, target_port, deadline)
+        # 隧道建好，套 TLS 并发一次真实 HTTP 请求（TLS 握手共享剩余预算）
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            return None
+        sock.settimeout(remaining)
         tls_sock = ssl.create_default_context().wrap_socket(
             sock, server_hostname=target_host
         )
@@ -473,11 +486,24 @@ def test_telegram_web_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
             pass
 
 
-def test_telegram_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC):
-    """TG 实测（串行合并口径，供脚本复用）：DC 与站点两关都通返回站点耗时。"""
-    if test_socks5_telegram_dc(host, port, timeout) is None:
+def test_telegram_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
+                             deadline=TG_TEST_DEADLINE_SEC):
+    """TG 实测（管线入口，两关串行）：先经代理 CONNECT Telegram 数据中心
+    （客户端实际线路，其往返毫秒作为延迟），通过后再全链路访问
+    desktop.telegram.org 验证可用且无劫持；任一关失败返回 None。
+    两关共享单节点总预算 deadline（秒），防个别节点拖垮整轮。
+    """
+    stage = max(1.0, min(timeout, deadline))
+    started = time.perf_counter()
+    dc_ms = test_socks5_telegram_dc(host, port, stage)
+    if dc_ms is None:
         return None
-    return test_telegram_web_via_socks5(host, port, timeout)
+    remaining = deadline - (time.perf_counter() - started)
+    if remaining <= 1.0:
+        return None
+    if test_telegram_web_via_socks5(host, port, min(timeout, remaining)) is None:
+        return None
+    return dc_ms
 
 
 def sort_proxies(proxies):
@@ -498,13 +524,16 @@ def sort_proxies(proxies):
 class ProxyManager:
     """代理状态管理：多源抓取 -> 合并去重 -> 抽样 -> 并发测试 -> 供 API 读取。"""
 
-    def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS):
+    def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS,
+                 known_good_path=None):
         self._lock = threading.Lock()
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
         self._max_tg_latency_ms = max_tg_latency_ms
+        self._known_good_path = known_good_path
         self._proxies = []
         self._sources = []
-        self._stats = {"available": 0, "tg_failed": 0, "dropped": 0, "excluded": 0}
+        self._stats = {"available": 0, "unverified": 0, "tg_failed": 0, "dropped": 0,
+                       "excluded": 0}
         self._updated_at = None
         self._fetching = False
         self._error = None
@@ -548,6 +577,9 @@ class ProxyManager:
             self._error = None
         try:
             self._run_refresh()
+        except Exception as exc:  # 兜底：任何异常都要落到 _error，UI 才能感知
+            with self._lock:
+                self._error = "刷新过程发生异常：%s" % exc
         finally:
             with self._lock:
                 self._fetching = False
@@ -601,37 +633,129 @@ class ProxyManager:
             excluded_total += excluded_count
             dropped_total += dropped_count
 
+        # 上轮验证通过的节点优先复测：不在池子里也补进来，抽样时优先保留
+        preferred_keys = self._merge_known_good(merged, seen)
+
         if len(merged) > MAX_TOTAL:
-            merged = random.sample(merged, MAX_TOTAL)
+            preferred = [e for e in merged if (e["host"], e["port"]) in preferred_keys]
+            rest = [e for e in merged if (e["host"], e["port"]) not in preferred_keys]
+            keep_n = max(0, MAX_TOTAL - len(preferred))
+            merged = preferred + random.sample(rest, min(len(rest), keep_n))
         tested = self._test_entries(merged)
         # 第一阶段：TCP 通的才进入第二阶段
         tcp_ok = [item for item in tested if item["status"] == "available"]
-        # 第二阶段：TG 实测——经代理真实访问 desktop.telegram.org，不通的剔除
+        # 第二阶段：TG 实测（DC -> 站点串行两关）
         verified = self._test_telegram_entries(tcp_ok)
-        # TG 两关通过且延迟达标的才保留；不通或太慢的都剔除
+        # TG 两关通过且延迟达标的才保留；不通或太慢的都剔除。
+        # MTProto 未参与 TG 实测（tg_ok=None）单独计为 unverified，不计入 available
+        verified_ok = [item for item in verified if item["tg_ok"] is True]
+        unverified = [item for item in verified if item["tg_ok"] is None]
         kept = [
-            item for item in verified
-            if item["tg_ok"] is not False
-            and (item["tg_latency_ms"] is None or item["tg_latency_ms"] <= self._max_tg_latency_ms)
+            item for item in verified_ok
+            if item["tg_latency_ms"] is None or item["tg_latency_ms"] <= self._max_tg_latency_ms
         ]
-        tg_failed = len(verified) - len(kept)
-        dropped = len(tested) - len(tcp_ok)
+        # tg_failed 含两关未过与超门槛（「含超慢」口径），保证四项统计之和 = 本轮测试总数
+        tg_failed = len(verified) - len(unverified) - len(kept)
         with self._lock:
-            self._proxies = kept
+            previous = self._proxies
+            if kept:
+                self._proxies = kept
+            elif previous:
+                # 本轮 0 达标（含全源抓取失败）：保留上一轮列表，兑现「失败时保留旧列表」
+                self._proxies = previous
+            else:
+                self._proxies = []
             self._sources = sources
             self._stats = {
                 "available": len(kept),
+                "unverified": len(unverified),
                 "tg_failed": tg_failed,
-                "dropped": dropped,
+                "dropped": len(tested) - len(tcp_ok),
                 "excluded": excluded_total + dropped_total,
             }
             self._updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # 部分源失败不视为整体失败；仅全部失败才提示
-            self._error = (
-                "全部 %d 个数据源抓取失败：%s" % (len(urls), failures[0])
-                if len(failures) == len(urls) and urls
-                else None
-            )
+            if failures and len(failures) == len(urls):
+                if kept:
+                    self._error = (
+                        "全部 %d 个数据源抓取失败：%s；已用 known_good 沉淀复测，保留 %d 个仍可用节点"
+                        % (len(urls), failures[0], len(kept))
+                    )
+                elif previous:
+                    self._error = "全部 %d 个数据源抓取失败：%s；已保留上一轮列表" % (
+                        len(urls), failures[0])
+                else:
+                    self._error = "全部 %d 个数据源抓取失败：%s" % (len(urls), failures[0])
+            elif not kept and previous:
+                self._error = "本轮 0 个节点通过 TG 实测（门槛 %d ms），已保留上一轮列表" % (
+                    self._max_tg_latency_ms)
+            else:
+                self._error = None
+        # 沉淀本轮验证通过的节点，供下轮优先复测（锁外落盘）
+        if kept:
+            self._save_known_good(kept)
+
+    def _load_known_good(self):
+        """读取上轮验证通过的节点（known_good.json；缺失/损坏返回空表）。"""
+        if not self._known_good_path or not os.path.isfile(self._known_good_path):
+            return []
+        try:
+            with open(self._known_good_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return []
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
+
+    def _merge_known_good(self, merged, seen):
+        """把上轮验证通过的节点补进候选（不在池子里也补），返回优先保留键集。"""
+        preferred = set()
+        for item in self._load_known_good():
+            host = parse_ipv4(str(item.get("host") or ""))
+            try:
+                port = int(str(item.get("port")))
+            except (TypeError, ValueError):
+                continue
+            if not host or not 1 <= port <= 65535:
+                continue
+            key = (host, port)
+            preferred.add(key)
+            if key not in seen:
+                seen.add(key)
+                merged.append({
+                    "link": "socks5://%s:%d" % (host, port),
+                    "host": host,
+                    "port": port,
+                    "type": "socks5",
+                    "latency_ms": None,
+                    "status": "unavailable",
+                    "location": "",
+                    "isp": "",
+                    "added_at": "",
+                })
+        return preferred
+
+    def _save_known_good(self, kept):
+        """沉淀本轮验证通过的节点（写盘失败不影响运行）。"""
+        if not self._known_good_path:
+            return
+        records = [
+            {
+                "host": item["host"],
+                "port": item["port"],
+                "tg_latency_ms": item.get("tg_latency_ms"),
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            for item in kept if item.get("tg_ok") is True
+        ]
+        records.sort(
+            key=lambda r: r["tg_latency_ms"] if r["tg_latency_ms"] is not None else 1 << 30
+        )
+        try:
+            with open(self._known_good_path, "w", encoding="utf-8") as fh:
+                json.dump(records[:200], fh, ensure_ascii=False, indent=1)
+        except OSError:
+            pass
 
     def find_entry(self, host, port):
         """按 host:port 查当前可用列表中的代理（供一键唤起 Telegram），无则返回 None。"""
@@ -642,41 +766,29 @@ class ProxyManager:
         return None
 
     def _test_telegram_entries(self, entries):
-        """并发 TG 实测：DC 与站点两关并行检测，延迟取两者较慢者（贴近真实体验）；
-        仅 SOCKS5 参与；MTProto 不适用（tg_ok=None 原样保留）。"""
+        """并发 TG 实测：每节点一条线程内先 DC 后站点串行两关（避免对同一免费代理
+        同时开两条连接触发限流的假失败）；延迟取「经代理到 Telegram 数据中心的往返」
+        （与 Telegram 客户端实际线路一致）。仅 SOCKS5 参与；MTProto 标记为未验证。"""
         if not entries:
             return []
         results = [None] * len(entries)
         with ThreadPoolExecutor(max_workers=TG_TEST_MAX_WORKERS) as executor:
-            futures = {}
-            for index, entry in enumerate(entries):
-                if entry["type"] != "socks5":
-                    continue
-                dc_future = executor.submit(
-                    test_socks5_telegram_dc, entry["host"], entry["port"]
+            futures = {
+                index: executor.submit(
+                    test_telegram_via_socks5, entry["host"], entry["port"]
                 )
-                web_future = executor.submit(
-                    test_telegram_web_via_socks5, entry["host"], entry["port"]
-                )
-                futures[(dc_future, web_future)] = index
-            tested = set()
-            for (dc_future, web_future), index in futures.items():
+                for index, entry in enumerate(entries)
+                if entry["type"] == "socks5"
+            }
+            for index, future in futures.items():
                 entry = dict(entries[index])
-                dc_ms = dc_future.result()
-                web_ms = web_future.result()
-                if dc_ms is not None and web_ms is not None:
-                    # 两关都过才算可用；延迟取「经代理到 Telegram 数据中心的往返」
-                    # （与 Telegram 客户端实际线路一致，最贴近使用体感）
-                    entry["tg_ok"] = True
-                    entry["tg_latency_ms"] = dc_ms
-                else:
-                    entry["tg_ok"] = False
-                    entry["tg_latency_ms"] = None
+                latency = future.result()
+                entry["tg_ok"] = latency is not None
+                entry["tg_latency_ms"] = latency
                 results[index] = entry
-                tested.add(index)
             # 未参与 SOCKS5 实测的（MTProto）标记为未验证
             for index, entry in enumerate(entries):
-                if index not in tested:
+                if index not in futures:
                     item = dict(entry)
                     item["tg_ok"] = None
                     item["tg_latency_ms"] = None

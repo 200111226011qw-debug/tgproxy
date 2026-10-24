@@ -43,8 +43,8 @@ object Constants {
     /** 单次 TCP connect 超时，等价桌面版 TEST_TIMEOUT_SEC=5.0 */
     const val TEST_TIMEOUT_MS = 5_000
 
-    /** 并发测试上限，等价桌面版 TEST_MAX_WORKERS=20 */
-    const val TEST_MAX_CONCURRENCY = 20
+    /** 并发测试上限（桌面版现为 150；移动端取 64 以平衡吞吐与功耗） */
+    const val TEST_MAX_CONCURRENCY = 64
 
     /** 自动更新间隔默认值（分钟） */
     const val DEFAULT_INTERVAL_MINUTES = 10

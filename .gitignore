@@ -8,6 +8,7 @@ desktop.ini
 __pycache__/
 *.pyc
 config.json
+known_good.json
 
 # 发行产物（dist/ 仅本地备料，不进仓库）
 version-release-client/dist/

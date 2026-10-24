@@ -149,6 +149,10 @@
       <div class="stat-label">可用（TG 实测通过）</div>
       <div class="stat-value" id="stat-available">0</div>
     </div>
+    <div class="stat-card">
+      <div class="stat-label">未验证（MTProto）</div>
+      <div class="stat-value" id="stat-unverified">0</div>
+    </div>
     <div class="stat-card stat-orange">
       <div class="stat-label">TCP 通但 TG 不合格（含超慢）</div>
       <div class="stat-value" id="stat-tg-failed">0</div>
@@ -171,7 +175,7 @@
       <label for="interval-input">自动更新间隔（分钟）</label>
       <input id="interval-input" type="number" min="1" max="1440" step="1" value="10">
       <label for="tg-limit-input">TG 延迟上限（毫秒，超限剔除）</label>
-      <input id="tg-limit-input" type="number" min="500" max="60000" step="100" value="6000">
+      <input id="tg-limit-input" type="number" min="500" max="60000" step="100" value="1000">
       <button id="save-interval-btn" class="btn" type="button">保存</button>
       <span id="settings-msg" class="settings-msg"></span>
     </div>
@@ -244,9 +248,9 @@
 
   function formatLatency(ms) {
     if (ms == null) { return { text: "—", cls: "lat-none" }; }
-    // TG 全链路口径（经代理两关实测）：<2s 绿 / <5s 橙 / 更慢红
-    if (ms < 2000) { return { text: ms + " ms", cls: "lat-green" }; }
-    if (ms < 5000) { return { text: ms + " ms", cls: "lat-orange" }; }
+    // TG 线路往返口径（与门槛/README 一致）：<1s 绿 / <3s 橙 / 更高红
+    if (ms < 1000) { return { text: ms + " ms", cls: "lat-green" }; }
+    if (ms < 3000) { return { text: ms + " ms", cls: "lat-orange" }; }
     return { text: ms + " ms", cls: "lat-red" };
   }
 
@@ -270,13 +274,15 @@
       var lat = (tgLat != null)
         ? formatLatency(tgLat)
         : formatLatency(p.latency_ms);
-      var latTitle = (tgLat != null) ? "TG 实测延迟" : "TCP 连接延迟";
+      var latTitle = (tgLat != null) ? "TG 线路往返延迟" : "TCP 连接延迟";
+      var unverified = (p.tg_ok === null)
+        ? '<span class="badge badge-unavailable">未验证</span> ' : "";
       html += "<tr>" +
         "<td>" + typeBadge(p.type) + "</td>" +
         '<td><button type="button" class="link-btn" data-link="' + escapeHtml(p.link) +
           '" title="点击复制完整链接">' + escapeHtml(p.host + ":" + p.port) + COPY_ICON +
         "</button></td>" +
-        '<td><span class="lat ' + lat.cls + '" title="' + latTitle + '">' + lat.text + "</span></td>" +
+        '<td>' + unverified + '<span class="lat ' + lat.cls + '" title="' + latTitle + '">' + lat.text + "</span></td>" +
         "<td>" + escapeHtml(p.location) + "</td>" +
         "<td>" + escapeHtml(p.isp) + "</td>" +
         "<td>" + escapeHtml(p.added_at) + "</td>" +
@@ -291,6 +297,7 @@
   function renderStats(stats) {
     stats = stats || {};
     $("stat-available").textContent = stats.available || 0;
+    $("stat-unverified").textContent = stats.unverified || 0;
     $("stat-tg-failed").textContent = stats.tg_failed || 0;
     $("stat-dropped").textContent = stats.dropped || 0;
     $("stat-excluded").textContent = stats.excluded || 0;

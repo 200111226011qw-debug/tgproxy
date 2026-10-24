@@ -3,9 +3,16 @@
 用于与 Kotlin ProxyParser 逐行代码追踪结果比对（三元组 + 每 entry 字段）。
 """
 import json
+import os
 import sys
 
-sys.path.insert(0, r"C:/Users/黄冬/WorkBuddy/2026-10-21-23-09-27/tgproxy")
+# 以本文件为基准定位仓库内的 tgproxy/（桌面版源码目录），换机器/换目录均可运行
+sys.path.insert(
+    0,
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, "tgproxy")
+    ),
+)
 from proxy_manager import parse_proxy_text  # noqa: E402
 
 VECTORS = {}

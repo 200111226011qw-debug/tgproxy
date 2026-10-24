@@ -111,7 +111,7 @@ private fun StatsGridPhonePreview() {
     TgProxyTheme {
         Surface(color = MaterialTheme.colorScheme.background) {
             StatsGrid(
-                stats = Stats(totalKept = 12, available = 5, unavailable = 7, excluded = 42),
+                stats = Stats(available = 5, dropped = 7, excluded = 42, tested = 12),
                 modifier = Modifier.padding(16.dp),
             )
         }
@@ -124,7 +124,7 @@ private fun StatsGridWidePreview() {
     TgProxyTheme {
         Surface(color = MaterialTheme.colorScheme.background) {
             StatsGrid(
-                stats = Stats(totalKept = 12, available = 5, unavailable = 7, excluded = 42),
+                stats = Stats(available = 5, dropped = 7, excluded = 42, tested = 12),
                 modifier = Modifier.padding(16.dp),
             )
         }

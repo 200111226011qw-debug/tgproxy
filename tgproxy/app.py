@@ -136,9 +136,17 @@ def telegram_proxy_url(entry):
 
     SOCKS5 必须用 tg://socks（tg://proxy 仅接受带 secret 的 MTProto 链接，
     缺 secret 会被 Telegram 忽略——表现为点击无反应）。
+    MTProto 统一收敛为 tg:// 前缀（t.me 链接转 tg://，避免唤起浏览器）。
     """
     if entry["type"] == "mtproto":
-        return entry["link"]
+        link = entry["link"]
+        if link.startswith("tg://"):
+            return link
+        lowered = link.lower()
+        if lowered.startswith(("http://t.me/", "https://t.me/",
+                               "http://www.t.me/", "https://www.t.me/")):
+            return "tg://" + link.split("://", 1)[1].split("/", 1)[1]
+        return link
     return "tg://socks?server=%s&port=%d" % (entry["host"], entry["port"])
 
 
@@ -287,7 +295,29 @@ class ApiHandler(BaseHTTPRequestHandler):
         except Exception as exc:  # 兜底：异常也以 JSON 返回，避免前端拿到非 JSON
             self._send_json({"ok": False, "error": str(exc)}, status=500)
 
+    def _origin_allowed(self):
+        """写接口防跨站投毒：本服务仅监听 127.0.0.1，浏览器发起的跨站 POST
+        必带 Origin 头；只放行本机来源，显式拒绝 Origin: null（file:// /
+        sandboxed iframe），无 Origin 的命令行客户端放行（遇
+        Sec-Fetch-Site: cross-site 仍拒绝）。"""
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            site = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+            return site != "cross-site"
+        if origin.lower() == "null":
+            return False
+        port = self.server.server_address[1]
+        return origin in (
+            "http://127.0.0.1:%d" % port,
+            "http://localhost:%d" % port,
+        )
+
     def do_POST(self):
+        if not self._origin_allowed():
+            self._send_json(
+                {"ok": False, "error": "已拒绝跨站请求"}, status=403
+            )
+            return
         try:
             path = urlparse(self.path).path
             if path == "/api/refresh":
@@ -445,7 +475,11 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def main():
     config = load_config()
-    manager = ProxyManager(config["proxy_list_urls"], config["max_tg_latency_ms"])
+    manager = ProxyManager(
+        config["proxy_list_urls"],
+        config["max_tg_latency_ms"],
+        known_good_path=os.path.join(BASE_DIR, "known_good.json"),
+    )
     server, port = create_server(ApiHandler, manager, config)
     config["port"] = port
     save_config(config)
