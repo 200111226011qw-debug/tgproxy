@@ -150,7 +150,7 @@
       <div class="stat-value" id="stat-available">0</div>
     </div>
     <div class="stat-card stat-orange">
-      <div class="stat-label">TCP 通但 TG 不通</div>
+      <div class="stat-label">TCP 通但 TG 不合格（含超慢）</div>
       <div class="stat-value" id="stat-tg-failed">0</div>
     </div>
     <div class="stat-card stat-gray">
@@ -170,6 +170,8 @@
     <div class="interval-group">
       <label for="interval-input">自动更新间隔（分钟）</label>
       <input id="interval-input" type="number" min="1" max="1440" step="1" value="10">
+      <label for="tg-limit-input">TG 延迟上限（毫秒，超限剔除）</label>
+      <input id="tg-limit-input" type="number" min="500" max="60000" step="100" value="6000">
       <button id="save-interval-btn" class="btn" type="button">保存</button>
       <span id="settings-msg" class="settings-msg"></span>
     </div>
@@ -242,8 +244,9 @@
 
   function formatLatency(ms) {
     if (ms == null) { return { text: "—", cls: "lat-none" }; }
-    if (ms < 200) { return { text: ms + " ms", cls: "lat-green" }; }
-    if (ms < 600) { return { text: ms + " ms", cls: "lat-orange" }; }
+    // TG 全链路口径（经代理两关实测）：<2s 绿 / <5s 橙 / 更慢红
+    if (ms < 2000) { return { text: ms + " ms", cls: "lat-green" }; }
+    if (ms < 5000) { return { text: ms + " ms", cls: "lat-orange" }; }
     return { text: ms + " ms", cls: "lat-red" };
   }
 
@@ -350,6 +353,7 @@
       .then(function (data) {
         state.settings = data;
         $("interval-input").value = data.interval_minutes;
+        $("tg-limit-input").value = data.max_tg_latency_ms;
         renderSourceUrls(data.proxy_list_urls || []);
       })
       .catch(function () { /* 忽略，使用输入框默认值 */ });
@@ -399,13 +403,19 @@
     var value = parseInt($("interval-input").value, 10);
     if (isNaN(value) || value < 1 || value > 1440) {
       settingsMsg.style.color = "#dc2626";
-      settingsMsg.textContent = "请输入 1~1440 之间的整数";
+      settingsMsg.textContent = "间隔请输入 1~1440 之间的整数";
+      return;
+    }
+    var tgLimit = parseInt($("tg-limit-input").value, 10);
+    if (isNaN(tgLimit) || tgLimit < 500 || tgLimit > 60000) {
+      settingsMsg.style.color = "#dc2626";
+      settingsMsg.textContent = "TG 延迟上限请在 500~60000 之间";
       return;
     }
     fetchJson("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interval_minutes: value })
+      body: JSON.stringify({ interval_minutes: value, max_tg_latency_ms: tgLimit })
     })
       .then(function (data) {
         if (data && data.ok) {

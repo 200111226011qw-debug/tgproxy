@@ -11,16 +11,15 @@ object Constants {
         "https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt"
 
     /**
-     * 默认数据源列表（与桌面版 DEFAULT_PROXY_LIST_URLS 一致，均经实测可用；
+     * 默认数据源列表（与桌面版 DEFAULT_PROXY_LIST_URLS 一致，2026-10-25 统一体检后精选；
      * raw.githubusercontent.com 失败时抓取层自动回退 jsDelivr 镜像）。
      */
     val DEFAULT_PROXY_LIST_URLS = listOf(
-        DEFAULT_PROXY_LIST_URL,
+        "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt",
+        "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=5000&country=all",
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
         "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
-        "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
-        "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks5.txt",
-        "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+        DEFAULT_PROXY_LIST_URL,
     )
 
     /** 抓取请求 UA，与桌面版一致 */

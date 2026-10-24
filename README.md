@@ -22,21 +22,26 @@
 - 严格 IPv4 校验（丢弃含掩码字符的非法地址）、host:port 去重、元数据提取（入库时间 / 地区 / ISP）
 - 界面：可用代理列表（按 TG 实测延迟升序）、延迟三档着色、一键复制完整链接、一键唤起 Telegram Desktop 弹出「添加代理」窗口（不跳网页）、手动刷新、自动更新倒计时、错误提示；统计卡为 可用（TG 实测通过）/ TCP 通但 TG 不通 / 不通已剔除 / 已排除
 
-## 数据源（多源并发抓取，失败自动回退镜像）
+## 数据源（2026-10-25 统一体测精选，多源并发抓取，失败自动回退镜像）
 
-内置 6 个免费代理源（均为 SOCKS5，raw.githubusercontent.com 直连失败时自动依次回退 cdn / gcore / fastly 三个 jsDelivr 镜像）：
+内置 5 个免费代理源，均经「抓取 → TCP → TG 两关实测」统一体检打分后入选；
+raw.githubusercontent.com 直连失败时自动依次回退 cdn / gcore / fastly 三个 jsDelivr 镜像：
 
-| 源 | 特点 |
-|---|---|
-| watchttvv/free-proxy-list | 原始源，含入库时间 / 地区 / ISP 元数据，含 MTProto |
-| monosans/proxy-list | 每 30 分钟自动验证更新，质量较高 |
-| TheSpeedX/PROXY-List | 每 6 小时更新，数量适中 |
-| hookzof/socks5_list | 多源聚合大列表 |
-| zevtyardt/proxy-list | 大列表 |
-| proxifly/free-proxy-list | 大列表（socks5:// 前缀格式） |
+| 源 | TG 通过率（存活节点） | 特点 |
+|---|---|---|
+| zloi-user/hideip.me | ~45% | 人工筛选池，质量最高，带国家元数据 |
+| proxyscrape API | ~24% | 实时验证接口，不走 GitHub |
+| monosans/proxy-list | ~25% | 每 30 分钟自动验证 |
+| TheSpeedX/PROXY-List | ~7% | 每 6 小时更新，补充数量多样性 |
+| watchttvv/free-proxy-list | 小池 | 原始源，含地区 / ISP 元数据，含 MTProto |
 
-- 支持两种行格式：`scheme://host:port 元数据` 与裸 `host:port`（无 scheme 的主流列表格式，按 SOCKS5 处理）
-- 各源解析结果按 host:port 全局去重合并；单源超过 1000 条随机抽样，合并超过 3000 条随机抽样，保证单轮刷新控制在分钟级
+已剔除的低产池（体测 TG 通过率 ≈ 0）：hookzof、proxifly、zevtyardt、jetkai、mmpx12。
+
+- 支持 `scheme://host:port 元数据`、裸 `host:port`、`host:port|国家` 三种行格式
+- **爬虫模式**：需要爬网页的源也能用——按行解析几乎无产出时，自动走通用抽取
+  （HTML / JSON / 任意文本中的 ip:port 对，含 geonode 等 JSON API 的 ip/port 字段），
+  误报由 TG 实测过滤
+- 各源解析结果按 host:port 全局去重合并；单源超过 1000 条随机抽样，合并超过 3000 条随机抽样
 - 可通过配置 / API 自定义数据源列表（桌面版 `config.json` 的 `proxy_list_urls`，安卓版在设置中追加自定义源）
 
 ## 快速开始

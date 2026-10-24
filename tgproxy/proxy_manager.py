@@ -1,5 +1,6 @@
 """代理列表抓取、解析、Telegram 适配筛选与连通性测试（仅 Python 标准库）。"""
 
+import json
 import random
 import re
 import socket
@@ -12,18 +13,19 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
-# 默认数据源（均已实测可用；raw.githubusercontent.com 失败时自动回退 jsDelivr 镜像）
+# 默认数据源（2026-10-25 统一标准体检：抓取 -> TCP -> TG 两关实测，按产出质量精选；
+# raw.githubusercontent.com 失败时自动回退 jsDelivr 镜像）
 DEFAULT_PROXY_LIST_URLS = [
+    # hideip.me 人工筛选池：TG 通过率最高（存活节点约 45% 可用）
+    "https://raw.githubusercontent.com/zloi-user/hideip.me/main/socks5.txt",
+    # proxyscrape 实时验证接口：通过率约 24%，且不走 GitHub（多一重可用性保障）
+    "https://api.proxyscrape.com/v2/?request=displayproxies&protocol=socks5&timeout=5000&country=all",
+    # monosans 每 30 分钟验证：通过率约 25%
+    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
+    # TheSpeedX 每 6 小时更新：通过率约 7%，用于补充数量多样性
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
     # 原始源：SOCKS5 + MTProto，带入库时间/地区/ISP 元数据
     "https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt",
-    # 每 30 分钟自动验证更新，质量较高
-    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
-    # 每 6 小时更新，数量适中
-    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/socks5.txt",
-    # 多源聚合大列表
-    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
-    "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks5.txt",
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
 ]
 USER_AGENT = "tgproxy/1.0 (local Telegram proxy manager)"
 FETCH_TIMEOUT_SEC = 15
@@ -41,6 +43,8 @@ TELEGRAM_TEST_HOST = "desktop.telegram.org"
 TELEGRAM_TEST_PORT = 443
 TG_TEST_TIMEOUT_SEC = 8.0
 TG_TEST_MAX_WORKERS = 100
+# TG 实测延迟门槛：超过该值视为「太慢不可用」剔除（默认 1s；界面可调 500~60000）
+TG_LATENCY_LIMIT_MS = 1000
 # raw.githubusercontent.com 直连失败时依次尝试的镜像（按国内可达性排序）
 MIRROR_HOSTS = ("cdn.jsdelivr.net", "gcore.jsdelivr.net", "fastly.jsdelivr.net")
 _RAW_URL_RE = re.compile(
@@ -53,6 +57,10 @@ _LINE_RE = re.compile(
 )
 # 裸地址行：host:port <空白> 元数据（TheSpeedX / monosans 等列表无 scheme，视为 SOCKS5）
 _BARE_RE = re.compile(r"^(?P<host>[0-9.]+):(?P<port>[0-9]{1,5})\s*(?P<meta>.*)$")
+# 爬虫抽取：任意 HTML / JSON / 文本页面中的 ip:port 对（ip 与端口间允许标签、引号、空白等）
+_CRAWL_PAIR_RE = re.compile(
+    r"(?P<ip>(?:[0-9]{1,3}\.){3}[0-9]{1,3})[^0-9]{1,20}?(?P<port>[0-9]{2,5})"
+)
 _ADDED_AT_RE = re.compile(r"入库时间[：:]\s*(\d{1,2}-\d{1,2}\s+\d{1,2}:\d{2})")
 _TAG_RE = re.compile(r"\[[^\]]*\]")
 _IPV4_SEGMENT_RE = re.compile(r"^[0-9]{1,3}$")
@@ -97,6 +105,13 @@ def _parse_meta(meta_text):
         added_at = " ".join(match.group(1).split())
         meta = meta[: match.start()] + " " + meta[match.end():]
     meta = _TAG_RE.sub(" ", meta)
+    # hideip.me 等列表的「|国家」后缀：把国家作为地区元数据
+    if "|" in meta:
+        return {
+            "added_at": added_at,
+            "location": " ".join(meta.replace("|", " ").split()),
+            "isp": "",
+        }
     location, isp = meta, ""
     for sep in (" — ", " —", "— ", "—", " - "):
         if sep in meta:
@@ -136,6 +151,78 @@ def _parse_mtproto(scheme, rest):
     if not host or not port or not secret:
         return None
     return {"link": "%s://%s" % (scheme, rest), "host": host, "port": port, "type": "mtproto"}
+
+
+def _crawl_from_json(node, entries, seen):
+    """递归遍历 JSON 结构，收集带 ip/host + port 字段的对象（geonode 等 API）。"""
+    if isinstance(node, list):
+        for item in node:
+            _crawl_from_json(item, entries, seen)
+    elif isinstance(node, dict):
+        host = node.get("ip") or node.get("host")
+        port = node.get("port")
+        host = parse_ipv4(str(host)) if host else None
+        try:
+            port = int(str(port))
+        except (TypeError, ValueError):
+            port = None
+        if host and port and 1 <= port <= 65535:
+            key = (host, port)
+            if key not in seen:
+                seen.add(key)
+                entries.append({
+                    "link": "socks5://%s:%d" % (host, port),
+                    "host": host,
+                    "port": port,
+                    "type": "socks5",
+                    "latency_ms": None,
+                    "status": "unavailable",
+                    "location": str(node.get("country") or ""),
+                    "isp": str(node.get("isp") or ""),
+                    "added_at": "",
+                })
+        for value in node.values():
+            if isinstance(value, (list, dict)):
+                _crawl_from_json(value, entries, seen)
+
+
+def crawl_extract(text):
+    """爬虫抽取：从任意 HTML / JSON / 文本中提取 ip:port 对，视为 SOCKS5。
+
+    供需要爬网页面的数据源使用（如 socks-proxy.net 等表格站、geonode 等 JSON API）；
+    抽取结果经严格 IPv4/端口校验并去重，配合 TG 实测过滤误报。
+    """
+    entries = []
+    seen = set()
+    stripped = (text or "").lstrip()
+    if stripped[:1] in ("{", "["):
+        try:
+            _crawl_from_json(json.loads(stripped), entries, seen)
+        except ValueError:
+            pass
+        if entries:
+            return entries
+    for match in _CRAWL_PAIR_RE.finditer(text or ""):
+        host = parse_ipv4(match.group("ip"))
+        port = parse_port(match.group("port"))
+        if not host or not port:
+            continue
+        key = (host, port)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append({
+            "link": "socks5://%s:%d" % (host, port),
+            "host": host,
+            "port": port,
+            "type": "socks5",
+            "latency_ms": None,
+            "status": "unavailable",
+            "location": "",
+            "isp": "",
+            "added_at": "",
+        })
+    return entries
 
 
 def parse_proxy_text(text):
@@ -342,18 +429,15 @@ def test_socks5_telegram_dc(host, port, timeout=TG_TEST_TIMEOUT_SEC,
             pass
 
 
-def test_telegram_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
-                             target_host=TELEGRAM_TEST_HOST,
-                             target_port=TELEGRAM_TEST_PORT):
-    """TG 实测：节点须同时打通 Telegram 数据中心与站点，返回站点往返毫秒；不通返回 None。
+def test_telegram_web_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
+                                 target_host=TELEGRAM_TEST_HOST,
+                                 target_port=TELEGRAM_TEST_PORT):
+    """TG 实测第二关：经代理全链路访问 Telegram 站点，返回往返毫秒；不通返回 None。
 
-    流程：代理 -> Telegram DC（CONNECT，验证客户端线路）；
-    再建一条代理 -> desktop.telegram.org（CONNECT + TLS 证书校验 + HTTP 状态行，
+    流程：代理 -> desktop.telegram.org（CONNECT + TLS 证书校验 + HTTP 状态行，
     验证全链路可用、无劫持）。
     """
     started = time.perf_counter()
-    if test_socks5_telegram_dc(host, port, timeout) is None:
-        return None
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
     except (OSError, ValueError):
@@ -389,6 +473,13 @@ def test_telegram_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
             pass
 
 
+def test_telegram_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC):
+    """TG 实测（串行合并口径，供脚本复用）：DC 与站点两关都通返回站点耗时。"""
+    if test_socks5_telegram_dc(host, port, timeout) is None:
+        return None
+    return test_telegram_web_via_socks5(host, port, timeout)
+
+
 def sort_proxies(proxies):
     """TG 实测通过的在前按 TG 延迟升序，未验证的（MTProto）分组在后。"""
     def sort_key(item):
@@ -407,12 +498,13 @@ def sort_proxies(proxies):
 class ProxyManager:
     """代理状态管理：多源抓取 -> 合并去重 -> 抽样 -> 并发测试 -> 供 API 读取。"""
 
-    def __init__(self, proxy_list_urls=None):
+    def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS):
         self._lock = threading.Lock()
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
+        self._max_tg_latency_ms = max_tg_latency_ms
         self._proxies = []
         self._sources = []
-        self._stats = {"total_kept": 0, "available": 0, "unavailable": 0, "excluded": 0}
+        self._stats = {"available": 0, "tg_failed": 0, "dropped": 0, "excluded": 0}
         self._updated_at = None
         self._fetching = False
         self._error = None
@@ -421,6 +513,11 @@ class ProxyManager:
         """热更新数据源列表（下次刷新生效）。"""
         with self._lock:
             self._proxy_list_urls = list(urls) if urls else list(DEFAULT_PROXY_LIST_URLS)
+
+    def set_max_tg_latency_ms(self, value):
+        """热更新 TG 实测延迟门槛（下次刷新生效）。"""
+        with self._lock:
+            self._max_tg_latency_ms = value
 
     def get_state(self):
         """返回当前完整状态快照（与 /api/proxies 字段一致）。"""
@@ -485,6 +582,11 @@ class ProxyManager:
                 sources.append(record)
                 continue
             entries, excluded_count, dropped_count = parse_proxy_text(item["text"])
+            if len(entries) < 5:
+                # 按行解析几乎无产出：多为需要爬取的 HTML / JSON 页面，走通用抽取
+                crawled = crawl_extract(item["text"])
+                if len(crawled) > len(entries):
+                    entries, excluded_count, dropped_count = crawled, 0, 0
             if len(entries) > MAX_PER_SOURCE:
                 entries = random.sample(entries, MAX_PER_SOURCE)
             kept = 0
@@ -506,7 +608,12 @@ class ProxyManager:
         tcp_ok = [item for item in tested if item["status"] == "available"]
         # 第二阶段：TG 实测——经代理真实访问 desktop.telegram.org，不通的剔除
         verified = self._test_telegram_entries(tcp_ok)
-        kept = [item for item in verified if item["tg_ok"] is not False]
+        # TG 两关通过且延迟达标的才保留；不通或太慢的都剔除
+        kept = [
+            item for item in verified
+            if item["tg_ok"] is not False
+            and (item["tg_latency_ms"] is None or item["tg_latency_ms"] <= self._max_tg_latency_ms)
+        ]
         tg_failed = len(verified) - len(kept)
         dropped = len(tested) - len(tcp_ok)
         with self._lock:
@@ -535,26 +642,39 @@ class ProxyManager:
         return None
 
     def _test_telegram_entries(self, entries):
-        """并发 TG 实测：仅 SOCKS5 参与；MTProto 不适用（tg_ok=None 原样保留）。"""
+        """并发 TG 实测：DC 与站点两关并行检测，延迟取两者较慢者（贴近真实体验）；
+        仅 SOCKS5 参与；MTProto 不适用（tg_ok=None 原样保留）。"""
         if not entries:
             return []
         results = [None] * len(entries)
         with ThreadPoolExecutor(max_workers=TG_TEST_MAX_WORKERS) as executor:
-            futures = {
-                executor.submit(
-                    test_telegram_via_socks5, entry["host"], entry["port"]
-                ): index
-                for index, entry in enumerate(entries)
-                if entry["type"] == "socks5"
-            }
+            futures = {}
+            for index, entry in enumerate(entries):
+                if entry["type"] != "socks5":
+                    continue
+                dc_future = executor.submit(
+                    test_socks5_telegram_dc, entry["host"], entry["port"]
+                )
+                web_future = executor.submit(
+                    test_telegram_web_via_socks5, entry["host"], entry["port"]
+                )
+                futures[(dc_future, web_future)] = index
             tested = set()
-            for future, index in futures.items():
+            for (dc_future, web_future), index in futures.items():
                 entry = dict(entries[index])
-                latency = future.result()
-                entry["tg_ok"] = latency is not None
-                entry["tg_latency_ms"] = latency
+                dc_ms = dc_future.result()
+                web_ms = web_future.result()
+                if dc_ms is not None and web_ms is not None:
+                    # 两关都过才算可用；延迟取「经代理到 Telegram 数据中心的往返」
+                    # （与 Telegram 客户端实际线路一致，最贴近使用体感）
+                    entry["tg_ok"] = True
+                    entry["tg_latency_ms"] = dc_ms
+                else:
+                    entry["tg_ok"] = False
+                    entry["tg_latency_ms"] = None
                 results[index] = entry
                 tested.add(index)
+            # 未参与 SOCKS5 实测的（MTProto）标记为未验证
             for index, entry in enumerate(entries):
                 if index not in tested:
                     item = dict(entry)

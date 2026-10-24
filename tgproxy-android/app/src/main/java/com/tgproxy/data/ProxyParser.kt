@@ -199,6 +199,10 @@ class ProxyParser {
                 meta.substring(match.range.last + 1)
         }
         meta = TAG_RE.replace(meta, " ")
+        // hideip.me 等列表的「|国家」后缀：把国家作为地区元数据
+        if (meta.contains("|")) {
+            return Meta(addedAt, collapseWhitespace(meta.replace("|", " ")), "")
+        }
         var location = meta
         var isp = ""
         for (sep in META_SEPARATORS) {

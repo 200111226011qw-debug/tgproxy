@@ -10,7 +10,11 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from proxy_manager import DEFAULT_PROXY_LIST_URLS, ProxyManager
+from proxy_manager import (
+    DEFAULT_PROXY_LIST_URLS,
+    TG_LATENCY_LIMIT_MS,
+    ProxyManager,
+)
 
 # PyInstaller 冻结运行时：可执行文件目录存配置，解包目录（_MEIPASS）取静态资源
 if getattr(sys, "frozen", False):
@@ -27,6 +31,8 @@ MAX_PORT_OFFSET = 50
 MIN_INTERVAL_MINUTES = 1
 MAX_INTERVAL_MINUTES = 1440
 MAX_PROXY_LIST_URLS = 20
+MIN_TG_LATENCY_MS = 500
+MAX_TG_LATENCY_MS = 60000
 
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -74,6 +80,12 @@ def normalize_config(config):
     config["proxy_list_urls"] = normalize_proxy_list_urls(config.get("proxy_list_urls"))
 
     try:
+        tg_limit = int(config.get("max_tg_latency_ms", TG_LATENCY_LIMIT_MS))
+    except (TypeError, ValueError):
+        tg_limit = TG_LATENCY_LIMIT_MS
+    config["max_tg_latency_ms"] = max(MIN_TG_LATENCY_MS, min(MAX_TG_LATENCY_MS, tg_limit))
+
+    try:
         port = int(config.get("port", DEFAULT_PORT))
     except (TypeError, ValueError):
         port = DEFAULT_PORT
@@ -86,6 +98,7 @@ def load_config():
     config = {
         "interval_minutes": 10,
         "proxy_list_urls": list(DEFAULT_PROXY_LIST_URLS),
+        "max_tg_latency_ms": TG_LATENCY_LIMIT_MS,
         "port": DEFAULT_PORT,
     }
     if os.path.isfile(CONFIG_PATH):
@@ -178,10 +191,12 @@ class TgProxyServer(ThreadingHTTPServer):
         return {
             "interval_minutes": self.settings["interval_minutes"],
             "proxy_list_urls": list(self.settings["proxy_list_urls"]),
+            "max_tg_latency_ms": self.settings["max_tg_latency_ms"],
             "port": self.server_address[1],
         }
 
-    def update_settings(self, interval_minutes=None, proxy_list_urls=None):
+    def update_settings(self, interval_minutes=None, proxy_list_urls=None,
+                        max_tg_latency_ms=None):
         """更新设置：立即生效并持久化到 config.json。"""
         if interval_minutes is not None:
             self.settings["interval_minutes"] = interval_minutes
@@ -190,6 +205,9 @@ class TgProxyServer(ThreadingHTTPServer):
         if proxy_list_urls is not None:
             self.settings["proxy_list_urls"] = proxy_list_urls
             self.manager.set_proxy_list_urls(proxy_list_urls)
+        if max_tg_latency_ms is not None:
+            self.settings["max_tg_latency_ms"] = max_tg_latency_ms
+            self.manager.set_max_tg_latency_ms(max_tg_latency_ms)
         save_config(self.settings)
         return self.public_settings()
 
@@ -380,8 +398,29 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             urls_body = urls
 
+        tg_limit = body.get("max_tg_latency_ms")
+        if tg_limit is not None:
+            try:
+                tg_limit = int(tg_limit)
+            except (TypeError, ValueError):
+                self._send_json(
+                    {"ok": False, "error": "max_tg_latency_ms 必须为整数"}, status=400
+                )
+                return
+            if not MIN_TG_LATENCY_MS <= tg_limit <= MAX_TG_LATENCY_MS:
+                self._send_json(
+                    {
+                        "ok": False,
+                        "error": "max_tg_latency_ms 需在 %d~%d 之间"
+                        % (MIN_TG_LATENCY_MS, MAX_TG_LATENCY_MS),
+                    },
+                    status=400,
+                )
+                return
+
         settings = self.server.update_settings(
-            interval_minutes=interval, proxy_list_urls=urls_body
+            interval_minutes=interval, proxy_list_urls=urls_body,
+            max_tg_latency_ms=tg_limit,
         )
         self._send_json({"ok": True, "settings": settings})
 
@@ -402,7 +441,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def main():
     config = load_config()
-    manager = ProxyManager(config["proxy_list_urls"])
+    manager = ProxyManager(config["proxy_list_urls"], config["max_tg_latency_ms"])
     server, port = create_server(ApiHandler, manager, config)
     config["port"] = port
     save_config(config)
