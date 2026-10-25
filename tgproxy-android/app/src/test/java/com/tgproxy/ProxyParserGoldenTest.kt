@@ -4,6 +4,7 @@ import com.tgproxy.data.ProxyParser
 import java.io.File
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -12,7 +13,8 @@ import org.junit.Test
  * 重放并逐字段比对，关闭「两套实现只有一套被测试」的缺口。
  *
  * vectors.json 定位：从工作目录向上查找 tgproxy-android/docs/（兼容不同 user.dir），
- * 找不到时回退测试类路径资源。org.json 在 AGP 单元测试中提供真实实现。
+ * 找不到时回退测试类路径资源。org.json 由 testImplementation(libs.json) 提供
+ * 真实实现（AGP 的 mockable android.jar 中是桩，调用即抛 not mocked）。
  *
  * 解析器行为变化时：Python 侧 `python qa_parser_vectors.py --update` 重新固化，
  * 本测试将在下一次运行中暴露两端的不一致。
