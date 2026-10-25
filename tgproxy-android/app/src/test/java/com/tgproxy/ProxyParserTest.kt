@@ -56,7 +56,7 @@ class ProxyParserTest {
     }
 
     @Test
-    fun `https t.me 与 www t.me 的 proxy 链接识别为 MTProto`() {
+    fun `https t me 与 www t me 的 proxy 链接识别为 MTProto`() {
         val text = "https://t.me/proxy?server=1.1.1.1&port=443&secret=aa\n" +
             "https://www.t.me/proxy?server=2.2.2.2&port=443&secret=bb"
         val result = parser.parse(text)
@@ -165,7 +165,7 @@ class ProxyParserTest {
     }
 
     @Test
-    fun `裸 host port 行按 SOCKS5 保留，无 // 的 scheme 行仍被丢弃`() {
+    fun `裸 host port 行按 SOCKS5 保留，无斜杠的 scheme 行仍被丢弃`() {
         val text = "1.2.3.4:1080\nsocks5:1.2.3.4:1080"
         val result = parser.parse(text)
 
@@ -225,7 +225,7 @@ class ProxyParserTest {
     }
 
     @Test
-    fun `http t.me 非 proxy 路径按普通行处理并丢弃`() {
+    fun `http t me 非 proxy 路径按普通行处理并丢弃`() {
         val result = parser.parse("http://t.me/notproxy")
 
         assertEquals(0, result.entries.size)

@@ -1,6 +1,7 @@
 package com.tgproxy.data
 
 import com.tgproxy.Constants
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
