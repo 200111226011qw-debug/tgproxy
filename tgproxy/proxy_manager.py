@@ -31,7 +31,7 @@ DEFAULT_PROXY_LIST_URLS = [
 ]
 USER_AGENT = "tgproxy/1.0 (local Telegram proxy manager)"
 FETCH_TIMEOUT_SEC = 15
-FETCH_MAX_SOURCES = 8
+FETCH_MAX_SOURCES = 20  # 与 app.py 的 MAX_PROXY_LIST_URLS 对齐，用户配的源全部参与抓取与体检
 TEST_TIMEOUT_SEC = 5.0
 # 免费列表动辄数万条，全量 TCP 测试耗时过久；抽样上限让单轮刷新控制在分钟级
 MAX_PER_SOURCE = 1000
@@ -560,9 +560,22 @@ class ProxyManager:
         self._error = None
 
     def set_proxy_list_urls(self, urls):
-        """热更新数据源列表（下次刷新生效）。"""
+        """热更新数据源列表（下次刷新生效）。
+
+        手动编辑视为对源列表的「重新观察」：本次写入的 URL 若此前被自动体检
+        停用（parked），清除其 parked/hist/fails，给源一次全新的评估机会。
+        """
         with self._lock:
             self._proxy_list_urls = list(urls) if urls else list(DEFAULT_PROXY_LIST_URLS)
+        health = self._load_source_health()
+        forgiven = False
+        for url in self._proxy_list_urls:
+            h = health.get(url)
+            if h and (h.get("parked") or h.get("hist") or h.get("fails")):
+                health[url] = {"hist": [], "fails": 0, "parked": None}
+                forgiven = True
+        if forgiven:
+            self._save_source_health(health)
 
     def set_max_tg_latency_ms(self, value):
         """热更新 TG 实测延迟门槛（下次刷新生效）。"""
@@ -684,7 +697,11 @@ class ProxyManager:
         for item in verified:
             if item["tg_ok"] is True and item["tg_latency_ms"] is not None \
                     and item["tg_latency_ms"] <= self._max_tg_latency_ms:
-                per_src_verified[item["_src"]] = per_src_verified.get(item["_src"], 0) + 1
+                # known_good 兜底补入的节点没有 _src（不属于任何源），跳过归因
+                src_url = item.get("_src")
+                if not src_url:
+                    continue
+                per_src_verified[src_url] = per_src_verified.get(src_url, 0) + 1
         notice = self._update_source_health(sources, per_src_verified)
         with self._lock:
             previous = self._proxies
@@ -825,6 +842,13 @@ class ProxyManager:
         health = self._load_source_health()
         with self._lock:
             active = list(self._proxy_list_urls)
+        # 全局 0 产出判定：所有成功抓取的源本轮 TG 验证产出全为 0，
+        # 判为环境异常（Telegram 封锁 / 门槛调严）而非「源变垃圾」——
+        # 本轮不累计零产出轮次、不停用、不补位，避免把用户的源全部换掉。
+        ok_sources = [r for r in sources if r["status"] == "ok"]
+        global_zero = bool(ok_sources) and all(
+            per_src_verified.get(r["url"], 0) == 0 for r in ok_sources
+        )
         parked_now = []
         for record in sources:
             url = record["url"]
@@ -836,6 +860,9 @@ class ProxyManager:
                     h["parked"] = "连续 %d 轮抓取失败" % h["fails"]
             else:
                 h["fails"] = 0
+                if global_zero:
+                    # 环境异常轮：不累计零产出（历史保持不变），且暂停停用判定
+                    continue
                 hist = [int(x) for x in (h.get("hist") or [])]
                 hist = hist[-(SOURCE_HIST_KEEP - 1):] + [int(per_src_verified.get(url, 0))]
                 h["hist"] = hist
@@ -875,6 +902,8 @@ class ProxyManager:
                 except Exception:
                     pass  # 配置持久化失败不影响运行；下次刷新会再次尝试
         self._save_source_health(health)
+        if global_zero and not replaced:
+            return "本轮全部源 0 个 TG 可用节点，疑似网络/门槛问题，已暂停自动换源"
         return "源自动体检：" + "；".join(replaced) if replaced else None
 
     def find_entry(self, host, port):

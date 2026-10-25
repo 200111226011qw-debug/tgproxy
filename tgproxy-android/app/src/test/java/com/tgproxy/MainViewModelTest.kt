@@ -8,8 +8,10 @@ import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.Settings
 import com.tgproxy.model.ThemeMode
 import com.tgproxy.ui.MainViewModel
+import androidx.lifecycle.viewModelScope
 import com.tgproxy.ui.TimeSource
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -147,6 +149,7 @@ class MainViewModelTest {
             assertFalse(viewModel.uiState.value.fetching)
             assertEquals(1, viewModel.uiState.value.proxies.size)
             assertEquals("socks5://1.2.3.4:1080", viewModel.uiState.value.proxies[0].link)
+            viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
         }
 
     @Test
@@ -175,6 +178,7 @@ class MainViewModelTest {
         advanceTimeBy(100)
         assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
         assertFalse(viewModel.uiState.value.fetching)
+        viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
     }
 
     @Test
@@ -214,6 +218,7 @@ class MainViewModelTest {
         assertEquals(1, viewModel.uiState.value.proxies.size)
         assertEquals("socks5://9.9.9.9:1080", viewModel.uiState.value.proxies[0].link)
         assertNull(viewModel.uiState.value.error)
+        viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
     }
 
     @Test
@@ -250,6 +255,7 @@ class MainViewModelTest {
             // 倒计时按新间隔（5 分钟 = 300 秒）重新计时
             assertEquals(300, viewModel.uiState.value.countdownSec)
             assertTrue(viewModel.uiState.value.countdownStarted)
+            viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
         }
 
     @Test
@@ -269,6 +275,7 @@ class MainViewModelTest {
         advanceTimeBy(1_100)
         assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size * 2, source.calls.get())
         assertFalse(viewModel.uiState.value.fetching)
+        viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
     }
 
     @Test
@@ -294,6 +301,7 @@ class MainViewModelTest {
         advanceTimeBy(100)
         assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size * 2, source.calls.get())
         assertFalse(viewModel.uiState.value.fetching)
+        viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
     }
 
     @Test
@@ -315,6 +323,7 @@ class MainViewModelTest {
 
         assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
         assertTrue(viewModel.uiState.value.countdownStarted)
+        viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
     }
 
     @Test
@@ -333,5 +342,6 @@ class MainViewModelTest {
 
         assertEquals(ThemeMode.DARK, store.savedTheme)
         assertEquals(ThemeMode.DARK, viewModel.settings.value.themeMode)
+        viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
     }
 }
