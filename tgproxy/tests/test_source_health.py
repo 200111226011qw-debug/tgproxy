@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""源自动体检回归测试（固化 2026-10-25 评审复核的 11 个离线用例的核心路径）。
+"""源自动体检回归测试（覆盖 2026-10-25 评审各轮发现的核心路径，共 9 个用例）。
 
 既可用 pytest 运行（python -m pytest tgproxy/tests -q），也可直接执行本文件。
 """
@@ -177,6 +177,22 @@ def test_sampling_floor_keeps_small_sources():
         counts[e["_src"]] = counts.get(e["_src"], 0) + 1
     for i in range(20):
         assert counts["https://s%d/x" % i] >= SOURCE_SAMPLE_FLOOR
+
+
+def test_four_sources_three_zero_protected():
+    """P2 回归：4 源 3 零（75%）判环境异常，不换源（v1.7.2 修复场景）。"""
+    d = tempfile.mkdtemp()
+    m = make_manager(d, "n4")
+    urls = ["https://%s/x" % c for c in "ABCD"]
+    m.set_proxy_list_urls(urls)  # 必须显式设置，否则 active 是 5 个默认源
+    notice = None
+    for _ in range(4):
+        notice = m._update_source_health(
+            [rec(u, "ok") for u in urls], {"https://D/x": 5})
+    health = load_health(d, "n4")
+    assert not any(health[u]["parked"] for u in urls)
+    assert "3/4" in (notice or "")
+    assert m._proxy_list_urls == urls
 
 
 if __name__ == "__main__":
