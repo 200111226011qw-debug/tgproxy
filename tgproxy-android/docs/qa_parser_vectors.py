@@ -170,24 +170,58 @@ VECTORS["V15_whitespace"] = (
     "socks5://3.4.5.6:1080    入库时间：  10-21   22:58   地区 — ISP\n"
 )
 
-results = {}
-for name, text in VECTORS.items():
-    entries, excluded, dropped = parse_proxy_text(text)
-    results[name] = {
-        "entries": [
-            {
-                "link": e["link"],
-                "host": e["host"],
-                "port": e["port"],
-                "type": e["type"],
-                "location": e["location"],
-                "isp": e["isp"],
-                "added_at": e["added_at"],
-            }
-            for e in entries
-        ],
-        "excluded": excluded,
-        "dropped": dropped,
-    }
+GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "vectors.json")
 
-print(json.dumps(results, ensure_ascii=False, indent=1))
+
+def build_results():
+    """对全部向量跑 parse_proxy_text，产出可 JSON 化的逐字段结果。"""
+    results = {}
+    for name, text in VECTORS.items():
+        entries, excluded, dropped = parse_proxy_text(text)
+        results[name] = {
+            "entries": [
+                {
+                    "link": e["link"],
+                    "host": e["host"],
+                    "port": e["port"],
+                    "type": e["type"],
+                    "location": e["location"],
+                    "isp": e["isp"],
+                    "added_at": e["added_at"],
+                }
+                for e in entries
+            ],
+            "excluded": excluded,
+            "dropped": dropped,
+        }
+    return results
+
+
+def test_parse_vectors():
+    """pytest 入口：当前解析结果必须与落盘 golden（vectors.json）逐字段一致。
+
+    解析器行为变化时用 `python qa_parser_vectors.py --update` 重新固化 golden，
+    并在 diff review 中说明每一处变化的理由。
+    """
+    current = build_results()
+    with open(GOLDEN_PATH, "r", encoding="utf-8") as fh:
+        golden = json.load(fh)
+    assert set(current) == set(golden), "向量集合不一致：%r" % (
+        set(current) ^ set(golden),)
+    for name in golden:
+        assert current[name] == golden[name], (
+            "向量 %s 的解析结果偏离 golden；当前: %s；golden: %s"
+            % (name, json.dumps(current[name], ensure_ascii=False),
+               json.dumps(golden[name], ensure_ascii=False))
+        )
+
+
+if __name__ == "__main__":
+    current = build_results()
+    if "--update" in sys.argv or not os.path.isfile(GOLDEN_PATH):
+        with open(GOLDEN_PATH, "w", encoding="utf-8") as fh:
+            json.dump(current, fh, ensure_ascii=False, indent=1)
+        print("golden 已固化：%s（%d 组向量）" % (GOLDEN_PATH, len(current)))
+        sys.exit(0)
+    test_parse_vectors()
+    print("OK：%d 组向量与 golden 逐字段一致" % len(current))
