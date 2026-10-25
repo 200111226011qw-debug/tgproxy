@@ -72,13 +72,14 @@ $r.body.Contains('旧句')   # 断言旧句已不在
 
 ### 2.2 PyInstaller onefile 解析（核 exe 内嵌代码）
 
-三个必踩的坑，按顺序：
+四个必踩的坑，按顺序：
 
 | 坑 | 现象 | 正解 |
 |---|---|---|
 | cookie 偏移 | `struct.unpack('!8sIIII')` 从 `MEI` 之后开始 → 魔数读出乱码 | 24 字节结构体**首字段就是魔数**，从 `MEI` 起点解包 |
 | TOC 解析 | 按 18 字节定长读 → 得到乱码 | PyInstaller 6 的 TOC 是 **marshal 序列化**的列表 |
 | PYZ 定位 | 在归档条目里找 `PYZ.pyz` → 解压失败 | PYZ 在 CArchive 内**可能未压缩**，直接搜 `b'PYZ\x00'` |
+| 包起点 | 用 `pos + 24 - pkg_len` 算 → TOC 读到 PYZ 里去、条目数只有 1 | 用 `len(data) - pkg_len`：**cookie 之后还有附加数据**（实测约 64 字节），文件末尾 ≠ cookie 末尾 |
 
 模块 blob 的额外一坑：**PyInstaller 已剥离 pyc 头**，`marshal.loads` 要从 `\xe3`（TYPE_CODE）起，不能跳 16 字节。
 
@@ -92,6 +93,14 @@ while stack:
 "RLock" in names            # 区分新旧版本的特征名
 dis.get_instructions(fn)    # 找 COMPARE_OP 与 LOAD_CONST 2/4，确认分支存在
 ```
+
+**`co_names` 与 `co_consts` 别查错表**（v1.8.0 踩过，差点误判"exe 里主脚本是旧版"）：
+
+- `co_names` 是**属性名/函数名**（`config.get` 的 `get`、`self._known_good_enabled` 的 `_known_good_enabled`）
+- 字符串**字面量**进 `co_consts`：`config.get("known_good_enabled", True)` 里的键名在 consts，不在 names
+- 归一表这类集合常量还可能以 **tuple** 形式整体存在 consts 里（`('true','1','yes','on')`），只遍历顶层字符串并用 `isalpha()` 过滤会漏掉
+
+**通用教训**：查之前先确认"这个特征在这份字节码里会以什么形态出现"，否则空结果既可能是"没有"，也可能是"查错了地方"——与规则 2-① 的假通过是同一个病。
 
 > 这招能把「产物是真的」从自述变成**可独立复算的事实**。
 
