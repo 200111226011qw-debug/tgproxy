@@ -5,6 +5,24 @@
 
 ---
 
+> ## ⚠️ v2.0.0 变更记录（2026-10-26，高于本文以下所有条款）
+>
+> v2.0.0 起安卓版与桌面版测试口径对齐，本文其余章节为 v1.x 设计快照，以下列变更为准：
+>
+> 1. **测试管线**：TCP 预筛（`ProxyTester`，`Semaphore(128)`，5s 超时，逐条进度上报）→ **TG 实测双闸**（新类 `data/TelegramGate.kt`：SOCKS5 无认证握手 → CONNECT Telegram DC 149.154.167.51:443，再 CONNECT desktop.telegram.org + TLS + HTTP 状态行；两关串行共享单节点 20s 总预算、单关 8s；并发 96，`TelegramGateCaller` 注入点）→ **1000ms 门槛**（`Constants.TG_LATENCY_LIMIT_MS`，超门槛计入 tg_failed）。
+> 2. **统计**：`Stats` 由四项改五项（available / unverified / tgFailed / dropped / excluded / tested），口径契约 available+unverified+tgFailed+dropped=tested；UI 由 `StatsGrid` 改为 `StatChips`（横滑胶囊）。
+> 3. **进度**：新增 `model/RefreshProgress`（FETCH / TCP_TEST / TG_TEST 三阶段 done/total），`ProxyRepository.refresh(urls, onProgress)` 逐阶段上报，UI 新增 `ProgressCard`。
+> 4. **known_good**：新增 `data/KnownGoodStore.kt`（应用私有目录 known_good.json；`enabled=false` 时不读不写；延迟/状态不落盘）；`Settings.knownGoodEnabled`（DataStore 键 `known_good_enabled`，默认开）；启动时先行展示沉淀列表，本轮刷新完成后替换。
+> 5. **排序/延迟口径**：`latencyMs` 语义改为「经代理到 TG 数据中心往返」（TG 实测通过后回填）；`PROXY_COMPARATOR` 首键由 status 改为 `TgVerdict`；延迟着色（`Badges.latencyColor`）改为 <1000 绿 / <3000 橙 / 其余红 / null 灰（桌面版口径）。
+> 6. **列表/交互**：列表仅含 TG 实测通过且 ≤1000ms 的节点；整卡点击唤起 Telegram 深链；行内复制/分享按钮（material-icons-extended）；known_good 先行展示条目半透明 + 「未测」胶囊。
+> 7. **主题**：深色主题改为 Telegram 品牌配色（#17212B / #232E3C / #2AABEE）；浅色主题不变。
+> 8. **可测性**：`ProxyTester`/`ProxyRepository` 增加可注入 `ioDispatcher`（JVM 单测全部协程共用同一测试调度器，消除跨线程派发竞态）；新增测试类 `TelegramGateTest` / `KnownGoodStoreTest`；`MainViewModelTest` / `ProxyRepositoryTest` / `ProxySortTest` / `ProxyTesterTest` 按新口径更新。测试矩阵：10 类 74 例 × debug/release = 148 例。
+> 9. **版本**：versionCode 10 / versionName 2.0.0。
+>
+> 以下 v1.x 快照中与此冲突的条款（C6 的 20 并发、F13 的延迟三档、Stats 四项、`StatsGrid`、`TEST_MAX_CONCURRENCY=20` 等）均已废止。
+
+---
+
 ## 1. 实现方案与框架选型
 
 ### 1.1 核心技术挑战与对策

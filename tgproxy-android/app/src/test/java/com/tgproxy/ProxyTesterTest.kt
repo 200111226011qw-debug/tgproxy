@@ -1,6 +1,7 @@
 package com.tgproxy
 
 import com.tgproxy.data.ProxyTester
+import com.tgproxy.data.testAll
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType

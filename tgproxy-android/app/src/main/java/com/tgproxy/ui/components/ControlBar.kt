@@ -1,6 +1,5 @@
 package com.tgproxy.ui.components
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,11 +11,16 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -40,13 +44,19 @@ fun formatCountdown(totalSec: Int): String = when {
 }
 
 /**
- * 控制区（对应桌面版 .toolbar）：刷新按钮（loading 态）+ 间隔输入/保存 + 保存结果提示 + 倒计时。
+ * 控制卡（v2.0 重做）：
+ *
+ * 第一行：刷新按钮（图标 + loading 态）+ 下次自动更新倒计时；
+ * 第二行：自动更新间隔输入 + 保存；
+ * 第三行：known_good 沉淀开关（上轮验证通过的节点优先复测、启动即展示）。
  *
  * @param fetching 刷新中（按钮禁用 + 文案「刷新中…」+ 按钮内 CircularProgressIndicator）
  * @param intervalText 间隔输入框当前文本
  * @param onIntervalTextChange 输入框变更回调
  * @param onRefresh 刷新回调
  * @param onSaveInterval 保存回调
+ * @param knownGoodEnabled known_good 沉淀开关当前值
+ * @param onKnownGoodChange 开关切换回调
  * @param settingsMessage 保存结果提示（null 不显示）
  * @param settingsMessageIsError 保存提示是否为错误态（红/绿）
  * @param countdownSec 距下次自动刷新秒数
@@ -59,6 +69,8 @@ fun ControlBar(
     onIntervalTextChange: (String) -> Unit,
     onRefresh: () -> Unit,
     onSaveInterval: () -> Unit,
+    knownGoodEnabled: Boolean,
+    onKnownGoodChange: (Boolean) -> Unit,
     settingsMessage: String?,
     settingsMessageIsError: Boolean,
     countdownSec: Int,
@@ -67,14 +79,19 @@ fun ControlBar(
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             // 第一行：刷新按钮 + 下次自动更新倒计时
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Button(onClick = onRefresh, enabled = !fetching) {
+                Button(
+                    onClick = onRefresh,
+                    enabled = !fetching,
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.buttonColors(),
+                ) {
                     if (fetching) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
@@ -84,6 +101,12 @@ fun ControlBar(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(text = "刷新中…")
                     } else {
+                        Icon(
+                            imageVector = Icons.Filled.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         Text(text = "刷新")
                     }
                 }
@@ -121,12 +144,36 @@ fun ControlBar(
                     textStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = onSaveInterval) {
+                Button(onClick = onSaveInterval, shape = RoundedCornerShape(10.dp)) {
                     Text(text = "保存")
                 }
             }
 
-            // 第三行：保存结果提示（成功绿 / 失败红，不自动清除）
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // 第三行：known_good 沉淀开关
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "known_good 沉淀",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text = "上轮验证通过的节点优先复测，启动即展示",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Switch(
+                    checked = knownGoodEnabled,
+                    onCheckedChange = onKnownGoodChange,
+                )
+            }
+
+            // 第四行：保存/开关结果提示（成功绿 / 失败红，不自动清除）
             if (settingsMessage != null) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
@@ -147,42 +194,33 @@ fun ControlBar(
 @Composable
 private fun ControlBarPreview() {
     TgProxyTheme {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+        Column(modifier = Modifier.padding(16.dp)) {
             ControlBar(
                 fetching = false,
                 intervalText = "10",
                 onIntervalTextChange = {},
                 onRefresh = {},
                 onSaveInterval = {},
+                knownGoodEnabled = true,
+                onKnownGoodChange = {},
                 settingsMessage = "已保存，立即生效",
                 settingsMessageIsError = false,
                 countdownSec = 605,
                 countdownStarted = true,
             )
+            Spacer(modifier = Modifier.height(12.dp))
             ControlBar(
                 fetching = true,
                 intervalText = "5",
                 onIntervalTextChange = {},
                 onRefresh = {},
                 onSaveInterval = {},
+                knownGoodEnabled = false,
+                onKnownGoodChange = {},
                 settingsMessage = "请输入 1~1440 之间的整数",
                 settingsMessageIsError = true,
                 countdownSec = 42,
                 countdownStarted = true,
-            )
-            ControlBar(
-                fetching = false,
-                intervalText = "10",
-                onIntervalTextChange = {},
-                onRefresh = {},
-                onSaveInterval = {},
-                settingsMessage = null,
-                settingsMessageIsError = false,
-                countdownSec = 0,
-                countdownStarted = false,
             )
         }
     }

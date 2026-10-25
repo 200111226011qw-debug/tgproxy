@@ -33,12 +33,12 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tgproxy.Constants
 import com.tgproxy.model.ProxyEntry
-import com.tgproxy.model.ProxyType
 import com.tgproxy.model.ThemeMode
 import com.tgproxy.ui.components.ControlBar
 import com.tgproxy.ui.components.ErrorBanner
+import com.tgproxy.ui.components.ProgressCard
 import com.tgproxy.ui.components.ProxyListSection
-import com.tgproxy.ui.components.StatsGrid
+import com.tgproxy.ui.components.StatChips
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -46,10 +46,11 @@ import kotlinx.coroutines.launch
 private data class CopyFlash(val link: String, val id: Long)
 
 /**
- * 主屏幕（单屏 Scaffold，对应桌面版 index.html 整体结构）。
+ * 主屏幕（v2.0 重做，单屏 Scaffold）。
  *
- * 自上而下：头部（标题/副标题/更新时间/主题切换）→ 统计卡区 → 错误条 → 控制区 →
- * 代理列表（下拉刷新，weight 1f）→ 页脚（数据来源）。
+ * 自上而下：头部（应用名 + 副标题/更新时间 + 主题切换）→ 刷新进度卡（刷新中）→
+ * 统计胶囊条 → 错误条 → 控制卡（刷新/间隔/known_good）→ 代理列表（下拉刷新，weight 1f）→
+ * 页脚（数据源 + 门槛说明）。
  */
 @Composable
 fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
@@ -112,23 +113,28 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.background,
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                // 头部：标题 + 副标题 + 更新时间 + 主题切换
+                // 头部：应用名 + 副标题 + 更新时间 + 主题切换
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 16.dp, end = 8.dp, top = 16.dp),
+                        .padding(start = 16.dp, end = 8.dp, top = 14.dp),
                     verticalAlignment = Alignment.Top,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Telegram 代理管理",
+                            text = "TG Proxy",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onBackground,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                         Text(
-                            text = "自动抓取 · 连通性测试 · 仅保留 Telegram 可用代理",
+                            text = "TG 实测双闸 · 仅保留延迟 ≤${Constants.TG_LATENCY_LIMIT_MS}ms 节点",
                             style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            text = "更新时间：${uiState.updatedAt ?: "--"}",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -143,15 +149,21 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         )
                     }
                 }
-                Text(
-                    text = "更新时间：${uiState.updatedAt ?: "--"}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 10.dp),
-                )
 
-                // 统计卡区
-                StatsGrid(
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 刷新进度卡（刷新中显示阶段 + done/total）
+                val progress = uiState.progress
+                if (progress != null) {
+                    ProgressCard(
+                        progress = progress,
+                        modifier = Modifier.padding(horizontal = 16.dp),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                // 统计胶囊条
+                StatChips(
                     stats = uiState.stats,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
@@ -167,13 +179,15 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     Spacer(modifier = Modifier.height(10.dp))
                 }
 
-                // 控制区
+                // 控制卡
                 ControlBar(
                     fetching = uiState.fetching,
                     intervalText = intervalText,
                     onIntervalTextChange = { intervalText = it },
                     onRefresh = { viewModel.refresh() },
                     onSaveInterval = { viewModel.saveIntervalInput(intervalText) },
+                    knownGoodEnabled = settings.knownGoodEnabled,
+                    onKnownGoodChange = { viewModel.setKnownGoodEnabled(it) },
                     settingsMessage = uiState.settingsMessage,
                     settingsMessageIsError = uiState.settingsMessageIsError,
                     countdownSec = uiState.countdownSec,

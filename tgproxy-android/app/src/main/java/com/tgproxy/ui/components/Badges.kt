@@ -52,13 +52,13 @@ fun TypeBadge(type: ProxyType, modifier: Modifier = Modifier) {
 }
 
 /**
- * 延迟着色唯一来源（ARCHITECTURE.md §8）：
- * null 灰 #9CA3AF / <200 绿 #16A34A / <600 橙 #D97706 / ≥600 红 #DC2626。
+ * 延迟着色唯一来源（ARCHITECTURE.md §8，桌面版口径）：
+ * null 灰 / <1000 绿 / <3000 橙 / 其余红。
  */
 fun latencyColor(latencyMs: Int?): Color = when {
     latencyMs == null -> LatencyNone
-    latencyMs < 200 -> LatencyGreen
-    latencyMs < 600 -> LatencyOrange
+    latencyMs < 1_000 -> LatencyGreen
+    latencyMs < 3_000 -> LatencyOrange
     else -> LatencyRed
 }
 

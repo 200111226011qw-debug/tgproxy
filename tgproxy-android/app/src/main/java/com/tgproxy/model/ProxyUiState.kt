@@ -5,9 +5,10 @@ package com.tgproxy.model
  *
  * @property updatedAt 最近一轮成功刷新的时间，格式 `yyyy-MM-dd HH:mm:ss`；从未成功时为 null
  * @property fetching 是否正在刷新（按钮禁用 + 列表遮罩）
+ * @property progress 刷新阶段进度（fetching 时非空；阶段+done/total）
  * @property error 错误信息（抓取失败等）；下一轮成功刷新时清除
- * @property stats 四项统计
- * @property proxies 已排序的代理列表（可用在前、延迟升序）
+ * @property stats 五项统计
+ * @property proxies 已排序的代理列表（TG 实测通过在前、延迟升序）
  * @property countdownSec 距下次自动刷新的秒数（≥0）
  * @property countdownStarted false 时倒计时显示「--」
  * @property settingsMessage 间隔保存结果提示（不自动清除，下次保存时覆盖）
@@ -16,6 +17,7 @@ package com.tgproxy.model
 data class ProxyUiState(
     val updatedAt: String? = null,
     val fetching: Boolean = false,
+    val progress: RefreshProgress? = null,
     val error: String? = null,
     val stats: Stats = Stats(),
     val proxies: List<ProxyEntry> = emptyList(),

@@ -8,6 +8,7 @@ import com.tgproxy.data.ProxyRepository
 import com.tgproxy.data.ProxyRepository.RefreshResult
 import com.tgproxy.data.SettingsStore
 import com.tgproxy.model.ProxyUiState
+import com.tgproxy.model.RefreshProgress
 import com.tgproxy.model.Settings
 import com.tgproxy.model.ThemeMode
 import com.tgproxy.model.parseIntervalInput
@@ -32,12 +33,16 @@ fun interface TimeSource {
  * 主 ViewModel：UI 唯一状态源（StateFlow 直推，替代桌面版轮询 + HTTP 快照）。
  *
  * 行为契约（ARCHITECTURE.md §3.4）：
- * 1. init：收集 settings（首个发射启动倒计时，间隔变化重置倒计时）+ 立即刷新（启动即刷新 P0-10）；
+ * 1. init：known_good 先行展示（开关开且有沉淀时列表立即可见）→ 收集 settings
+ *    （首个发射启动倒计时，间隔变化重置倒计时）+ 立即刷新（启动即刷新 P0-10）；
  * 2. refreshAwait：`Mutex.tryLock` 互斥（第二调用直接忽略，等价桌面版 `_fetching`）；
- *    成功写 proxies/stats/updatedAt 并清 error，失败**仅**写 error（旧列表保留）；
+ *    成功写 proxies/stats/updatedAt 并清 error；本轮 0 达标但已有列表时保留旧列表
+ *    （等价桌面版「失败时保留旧列表」）；失败**仅**写 error（旧列表保留）；
+ *    刷新期间 progress 逐阶段透传（抓取/TCP/TG done/total）；
  * 3. 倒计时循环：每秒 tick 写 countdownSec；到期后挂起等待一轮刷新完成再重置 deadline；
  * 4. onResumeSync：恢复 tick（保留 deadline）；超龄则立即补刷并重置 deadline；
- * 5. saveIntervalInput：非法输入只提示不持久化；合法写 DataStore，「已保存，立即生效」。
+ * 5. saveIntervalInput：非法输入只提示不持久化；合法写 DataStore，「已保存，立即生效」；
+ * 6. setKnownGoodEnabled：写 DataStore 并同步 known_good 存储开关（立即生效）。
  */
 class MainViewModel(
     private val repository: ProxyRepository,
@@ -68,12 +73,30 @@ class MainViewModel(
             settingsStore.settings.collect { newSettings ->
                 val intervalChanged =
                     _settings.value.intervalMinutes != newSettings.intervalMinutes
+                val knownGoodChanged =
+                    _settings.value.knownGoodEnabled != newSettings.knownGoodEnabled
                 _settings.value = newSettings
+                repository.setKnownGoodEnabled(newSettings.knownGoodEnabled)
                 intervalSec = newSettings.intervalMinutes
                     .coerceAtLeast(Constants.MIN_INTERVAL_MINUTES) * 60L
                 when {
-                    countdownJob == null -> launchCountdown(resetDeadline = true)
+                    countdownJob == null -> {
+                        // known_good 先行展示：开关开且有沉淀时，启动即有列表（下轮刷新再验）
+                        if (newSettings.knownGoodEnabled) {
+                            val saved = repository.loadKnownGood()
+                            if (saved.isNotEmpty() && _uiState.value.proxies.isEmpty()) {
+                                _uiState.value = _uiState.value.copy(
+                                    proxies = repository.sortProxies(saved),
+                                    updatedAt = null,
+                                )
+                            }
+                        }
+                        launchCountdown(resetDeadline = true)
+                    }
                     intervalChanged -> launchCountdown(resetDeadline = true)
+                    knownGoodChanged && !newSettings.knownGoodEnabled -> {
+                        // 关闭沉淀：不影响当前列表，仅停止后续读写（存储侧已同步）
+                    }
                 }
             }
         }
@@ -94,15 +117,35 @@ class MainViewModel(
     private suspend fun refreshAwait() {
         if (!refreshMutex.tryLock()) return
         try {
-            _uiState.value = _uiState.value.copy(fetching = true, error = null)
-            when (val result = repository.refresh(resolveUrls(_settings.value))) {
+            _uiState.value = _uiState.value.copy(fetching = true, error = null, progress = null)
+            val onProgress: (RefreshProgress) -> Unit = { progress ->
+                _uiState.value = _uiState.value.copy(progress = progress)
+            }
+            when (val result = repository.refresh(resolveUrls(_settings.value), onProgress)) {
                 is RefreshResult.Success -> {
-                    _uiState.value = _uiState.value.copy(
-                        proxies = repository.sortProxies(result.entries),
-                        stats = result.stats,
-                        updatedAt = result.updatedAt,
-                        error = null,
-                    )
+                    val previous = _uiState.value.proxies
+                    if (result.entries.isNotEmpty()) {
+                        _uiState.value = _uiState.value.copy(
+                            proxies = repository.sortProxies(result.entries),
+                            stats = result.stats,
+                            updatedAt = result.updatedAt,
+                            error = null,
+                        )
+                    } else if (previous.isNotEmpty()) {
+                        // 本轮 0 达标：保留上一轮列表（等价桌面版）
+                        _uiState.value = _uiState.value.copy(
+                            stats = result.stats,
+                            updatedAt = result.updatedAt,
+                            error = "本轮 0 个节点通过 TG 实测（门槛 ${Constants.TG_LATENCY_LIMIT_MS}ms），已保留上一轮列表",
+                        )
+                    } else {
+                        _uiState.value = _uiState.value.copy(
+                            proxies = emptyList(),
+                            stats = result.stats,
+                            updatedAt = result.updatedAt,
+                            error = null,
+                        )
+                    }
                 }
                 is RefreshResult.Failure -> {
                     // 失败降级：仅更新 error，proxies/stats/updatedAt 原样保留（P0-1/P0-9）
@@ -110,7 +153,7 @@ class MainViewModel(
                 }
             }
         } finally {
-            _uiState.value = _uiState.value.copy(fetching = false)
+            _uiState.value = _uiState.value.copy(fetching = false, progress = null)
             refreshMutex.unlock()
         }
     }
@@ -155,6 +198,23 @@ class MainViewModel(
     /** 切换主题模式（循环 SYSTEM → LIGHT → DARK）。 */
     fun setThemeMode(mode: ThemeMode) {
         viewModelScope.launch { settingsStore.setThemeMode(mode) }
+    }
+
+    /** 切换 known_good 沉淀开关：持久化 + 存储侧立即生效。 */
+    fun setKnownGoodEnabled(value: Boolean) {
+        viewModelScope.launch {
+            try {
+                settingsStore.setKnownGoodEnabled(value)
+                repository.setKnownGoodEnabled(value)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    settingsMessage = "保存失败：${e.message ?: e.toString()}",
+                    settingsMessageIsError = true,
+                )
+            }
+        }
     }
 
     /**
