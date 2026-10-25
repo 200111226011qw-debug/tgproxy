@@ -549,7 +549,7 @@ class ProxyManager:
     def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS,
                  known_good_path=None, source_health_path=None,
                  on_sources_changed=None):
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # 可重入：体检全程持锁，内部再取锁不致死锁
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
         self._max_tg_latency_ms = max_tg_latency_ms
         self._known_good_path = known_good_path
@@ -882,72 +882,84 @@ class ProxyManager:
           至少保留一个活跃源；变更经 on_sources_changed 回调持久化到配置。
         返回给 UI 的 notice 文本（无变化时为 None）。
         """
-        health = self._load_source_health()
+        # 全程持锁（RLock 可重入）：健康度读改写与活跃源变更对设置保存线程原子，
+        # 消除「体检保存覆盖设置保存」的竞态窗口。
         with self._lock:
+            health = self._load_source_health()
             active = list(self._proxy_list_urls)
-        # 环境异常判定（比例口径）：成功抓取的源中 0 产出占比 >= 80%，
-        # 判为 Telegram 封锁 / 门槛调严而非「源变垃圾」——本轮不累计零产出、
-        # 不停用、不补位，避免部分劣化（还有个别源活着）时把用户的源全部换掉。
-        ok_sources = [r for r in sources if r["status"] == "ok"]
-        zero_cnt = sum(
-            1 for r in ok_sources if per_src_verified.get(r["url"], 0) == 0
-        )
-        global_zero = bool(ok_sources) and zero_cnt >= len(ok_sources) * SOURCE_GLOBAL_ZERO_RATIO
-        parked_now = []
-        for record in sources:
-            url = record["url"]
-            h = health.setdefault(url, {"hist": [], "fails": 0, "parked": None})
-            if record["status"] != "ok":
-                h["fails"] = int(h.get("fails", 0)) + 1
-                h["last_error"] = str(record.get("error") or "")[:120]
-                if h["fails"] >= SOURCE_PARK_FAILS and not h.get("parked"):
-                    h["parked"] = "连续 %d 轮抓取失败" % h["fails"]
+            # 环境异常判定（分级比例口径）：成功抓取的源中 0 产出占比过高时，
+            # 判为 Telegram 封锁 / 门槛调严而非「源变垃圾」——本轮不累计零产出、
+            # 不停用、不补位，避免部分劣化（还有个别源活着）时把用户的源全部换掉。
+            # 分级：<=2 源无法区分源垃圾与环境异常，仅全 0 时保护；
+            #       3~4 源 80% 阈值会退化为「必须全 0」，放宽为「至多 1 个源有产出」；
+            #       >=5 源按 80% 比例（SOURCE_GLOBAL_ZERO_RATIO）。
+            ok_sources = [r for r in sources if r["status"] == "ok"]
+            n_ok = len(ok_sources)
+            zero_cnt = sum(
+                1 for r in ok_sources if per_src_verified.get(r["url"], 0) == 0
+            )
+            if n_ok <= 2:
+                protected = zero_cnt == n_ok
+            elif n_ok <= 4:
+                protected = zero_cnt >= n_ok - 1
             else:
-                h["fails"] = 0
-                verified_now = int(per_src_verified.get(url, 0))
-                if global_zero and verified_now == 0:
-                    # 环境异常轮：零产出不累计（历史保持不变），暂停停用判定；
-                    # 有产出的源照常记录，便于区分「个别源还行」的情况
-                    continue
-                hist = [int(x) for x in (h.get("hist") or [])]
-                hist = hist[-(SOURCE_HIST_KEEP - 1):] + [verified_now]
-                h["hist"] = hist
-                tail = hist[-SOURCE_PARK_ZERO_ROUNDS:]
-                if len(tail) >= SOURCE_PARK_ZERO_ROUNDS and all(x == 0 for x in tail) \
-                        and not h.get("parked"):
-                    h["parked"] = "连续 %d 轮 0 个 TG 可用节点" % SOURCE_PARK_ZERO_ROUNDS
-            if h.get("parked") and url in active \
-                    and url not in [u for u, _ in parked_now]:
-                parked_now.append((url, h["parked"]))
-        # 至少保留一个活跃源：仅当「无候选可补且会把活跃源清零」时撤销本轮停用
-        candidates = [c for c in SOURCE_CANDIDATES
-                      if c not in active and not health.get(c, {}).get("parked")]
-        remaining_after = len(active) - len(parked_now) + min(
-            len(parked_now), len(candidates))
-        if active and remaining_after < 1:
-            for url, _ in parked_now:
-                health[url]["parked"] = None
+                protected = zero_cnt * 10 >= int(
+                    round(SOURCE_GLOBAL_ZERO_RATIO * 10)) * n_ok
+            global_zero = bool(ok_sources) and protected
             parked_now = []
-        replaced = []
-        for i, (url, reason) in enumerate(parked_now):
-            active.remove(url)
-            entry_text = "停用 %s（%s）" % (url, reason)
-            if i < len(candidates):
-                active.append(candidates[i])
-                health.setdefault(
-                    candidates[i], {"hist": [], "fails": 0, "parked": None})
-                entry_text += "，补位 %s" % candidates[i]
-            replaced.append(entry_text)
-        if replaced:
-            with self._lock:
+            for record in sources:
+                url = record["url"]
+                h = health.setdefault(url, {"hist": [], "fails": 0, "parked": None})
+                if record["status"] != "ok":
+                    h["fails"] = int(h.get("fails", 0)) + 1
+                    h["last_error"] = str(record.get("error") or "")[:120]
+                    if h["fails"] >= SOURCE_PARK_FAILS and not h.get("parked"):
+                        h["parked"] = "连续 %d 轮抓取失败" % h["fails"]
+                else:
+                    h["fails"] = 0
+                    verified_now = int(per_src_verified.get(url, 0))
+                    if global_zero and verified_now == 0:
+                        # 环境异常轮：零产出不累计（历史保持不变），暂停停用判定；
+                        # 有产出的源照常记录，便于区分「个别源还行」的情况
+                        continue
+                    hist = [int(x) for x in (h.get("hist") or [])]
+                    hist = hist[-(SOURCE_HIST_KEEP - 1):] + [verified_now]
+                    h["hist"] = hist
+                    tail = hist[-SOURCE_PARK_ZERO_ROUNDS:]
+                    if len(tail) >= SOURCE_PARK_ZERO_ROUNDS \
+                            and all(x == 0 for x in tail) and not h.get("parked"):
+                        h["parked"] = "连续 %d 轮 0 个 TG 可用节点" % SOURCE_PARK_ZERO_ROUNDS
+                if h.get("parked") and url in active \
+                        and url not in [u for u, _ in parked_now]:
+                    parked_now.append((url, h["parked"]))
+            # 至少保留一个活跃源：仅当「无候选可补且会把活跃源清零」时撤销本轮停用
+            candidates = [c for c in SOURCE_CANDIDATES
+                          if c not in active and not health.get(c, {}).get("parked")]
+            remaining_after = len(active) - len(parked_now) + min(
+                len(parked_now), len(candidates))
+            if active and remaining_after < 1:
+                for url, _ in parked_now:
+                    health[url]["parked"] = None
+                parked_now = []
+            replaced = []
+            for i, (url, reason) in enumerate(parked_now):
+                active.remove(url)
+                entry_text = "停用 %s（%s）" % (url, reason)
+                if i < len(candidates):
+                    active.append(candidates[i])
+                    health.setdefault(
+                        candidates[i], {"hist": [], "fails": 0, "parked": None})
+                    entry_text += "，补位 %s" % candidates[i]
+                replaced.append(entry_text)
+            if replaced:
                 self._proxy_list_urls = active
+            self._save_source_health(health)  # 无论是否有替换，本轮健康度都落盘
             callback = self._on_sources_changed
             if callback is not None:
                 try:
                     callback(list(active))
                 except Exception:
                     pass  # 配置持久化失败不影响运行；下次刷新会再次尝试
-        self._save_source_health(health)
         parts = []
         if global_zero:
             parts.append(
