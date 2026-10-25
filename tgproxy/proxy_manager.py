@@ -548,11 +548,12 @@ class ProxyManager:
 
     def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS,
                  known_good_path=None, source_health_path=None,
-                 on_sources_changed=None):
+                 on_sources_changed=None, known_good_enabled=True):
         self._lock = threading.RLock()  # 可重入：体检全程持锁，内部再取锁不致死锁
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
         self._max_tg_latency_ms = max_tg_latency_ms
         self._known_good_path = known_good_path
+        self._known_good_enabled = bool(known_good_enabled)
         self._source_health_path = source_health_path
         self._on_sources_changed = on_sources_changed
         self._notice = None
@@ -587,6 +588,12 @@ class ProxyManager:
                     changed = True
             if changed:
                 self._save_source_health(health)
+
+    def set_known_good_enabled(self, enabled):
+        """热更新 known_good 沉淀开关（下次刷新生效）：关闭后不再读取或写入
+        known_good.json（已有文件保留不动，重新开启后恢复使用）。"""
+        with self._lock:
+            self._known_good_enabled = bool(enabled)
 
     def set_max_tg_latency_ms(self, value):
         """热更新 TG 实测延迟门槛（下次刷新生效）。"""
@@ -767,8 +774,8 @@ class ProxyManager:
             item.pop("_src", None)
         for item in unverified:
             item.pop("_src", None)
-        # 沉淀本轮验证通过的节点，供下轮优先复测（锁外落盘）
-        if kept:
+        # 沉淀本轮验证通过的节点，供下轮优先复测（锁外落盘）；开关关闭时不写
+        if kept and self._known_good_enabled:
             self._save_known_good(kept)
 
     def _load_known_good(self):
@@ -785,8 +792,13 @@ class ProxyManager:
         return [item for item in data if isinstance(item, dict)]
 
     def _merge_known_good(self, merged, seen):
-        """把上轮验证通过的节点补进候选（不在池子里也补），返回优先保留键集。"""
+        """把上轮验证通过的节点补进候选（不在池子里也补），返回优先保留键集。
+
+        known_good 沉淀开关关闭时不读取、不补入（known_good.json 保留不动）。
+        """
         preferred = set()
+        if not self._known_good_enabled:
+            return preferred
         for item in self._load_known_good():
             host = parse_ipv4(str(item.get("host") or ""))
             try:
@@ -813,8 +825,8 @@ class ProxyManager:
         return preferred
 
     def _save_known_good(self, kept):
-        """沉淀本轮验证通过的节点（写盘失败不影响运行）。"""
-        if not self._known_good_path:
+        """沉淀本轮验证通过的节点（写盘失败不影响运行）；开关关闭时不写。"""
+        if not self._known_good_path or not self._known_good_enabled:
             return
         records = [
             {

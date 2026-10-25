@@ -85,6 +85,18 @@ def normalize_config(config):
         tg_limit = TG_LATENCY_LIMIT_MS
     config["max_tg_latency_ms"] = max(MIN_TG_LATENCY_MS, min(MAX_TG_LATENCY_MS, tg_limit))
 
+    # known_good 沉淀开关：接受 true/false（字符串宽容转换），非法值回退默认开
+    kg_enabled = config.get("known_good_enabled", True)
+    if isinstance(kg_enabled, str):
+        kg_enabled = kg_enabled.strip().lower()
+        if kg_enabled in ("true", "1", "yes", "on"):
+            kg_enabled = True
+        elif kg_enabled in ("false", "0", "no", "off"):
+            kg_enabled = False
+    if not isinstance(kg_enabled, bool):
+        kg_enabled = True
+    config["known_good_enabled"] = kg_enabled
+
     try:
         port = int(config.get("port", DEFAULT_PORT))
     except (TypeError, ValueError):
@@ -99,6 +111,7 @@ def load_config():
         "interval_minutes": 10,
         "proxy_list_urls": list(DEFAULT_PROXY_LIST_URLS),
         "max_tg_latency_ms": TG_LATENCY_LIMIT_MS,
+        "known_good_enabled": True,
         "port": DEFAULT_PORT,
     }
     if os.path.isfile(CONFIG_PATH):
@@ -204,11 +217,12 @@ class TgProxyServer(ThreadingHTTPServer):
             "interval_minutes": self.settings["interval_minutes"],
             "proxy_list_urls": list(self.settings["proxy_list_urls"]),
             "max_tg_latency_ms": self.settings["max_tg_latency_ms"],
+            "known_good_enabled": self.settings["known_good_enabled"],
             "port": self.server_address[1],
         }
 
     def update_settings(self, interval_minutes=None, proxy_list_urls=None,
-                        max_tg_latency_ms=None):
+                        max_tg_latency_ms=None, known_good_enabled=None):
         """更新设置：立即生效并持久化到 config.json。"""
         if interval_minutes is not None:
             self.settings["interval_minutes"] = interval_minutes
@@ -220,6 +234,9 @@ class TgProxyServer(ThreadingHTTPServer):
         if max_tg_latency_ms is not None:
             self.settings["max_tg_latency_ms"] = max_tg_latency_ms
             self.manager.set_max_tg_latency_ms(max_tg_latency_ms)
+        if known_good_enabled is not None:
+            self.settings["known_good_enabled"] = bool(known_good_enabled)
+            self.manager.set_known_good_enabled(bool(known_good_enabled))
         save_config(self.settings)
         return self.public_settings()
 
@@ -432,6 +449,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             urls_body = urls
 
+        kg_enabled = body.get("known_good_enabled")
+        if kg_enabled is not None and not isinstance(kg_enabled, bool):
+            self._send_json(
+                {"ok": False, "error": "known_good_enabled 必须是布尔值"}, status=400
+            )
+            return
         tg_limit = body.get("max_tg_latency_ms")
         if tg_limit is not None:
             try:
@@ -454,7 +477,7 @@ class ApiHandler(BaseHTTPRequestHandler):
 
         settings = self.server.update_settings(
             interval_minutes=interval, proxy_list_urls=urls_body,
-            max_tg_latency_ms=tg_limit,
+            max_tg_latency_ms=tg_limit, known_good_enabled=kg_enabled,
         )
         self._send_json({"ok": True, "settings": settings})
 
@@ -486,6 +509,7 @@ def main():
         known_good_path=os.path.join(BASE_DIR, "known_good.json"),
         source_health_path=os.path.join(BASE_DIR, "source_health.json"),
         on_sources_changed=persist_active_urls,
+        known_good_enabled=config["known_good_enabled"],
     )
     # 用户手动编辑 config.json 加回被停用的源后，重启即宽恕（重新观察）
     manager.forgive_sources(config["proxy_list_urls"])

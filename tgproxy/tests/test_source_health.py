@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""源自动体检回归测试（覆盖 2026-10-25 评审各轮发现的核心路径，共 9 个用例）。
+"""源自动体检回归测试（覆盖 2026-10-25 评审各轮发现的核心路径，共 10 个用例）。
 
 既可用 pytest 运行（python -m pytest tgproxy/tests -q），也可直接执行本文件。
 """
@@ -177,6 +177,31 @@ def test_sampling_floor_keeps_small_sources():
         counts[e["_src"]] = counts.get(e["_src"], 0) + 1
     for i in range(20):
         assert counts["https://s%d/x" % i] >= SOURCE_SAMPLE_FLOOR
+
+
+def test_known_good_switch_disabled_skips_read_and_write():
+    """开关关闭：known_good.json 不读取、不写入；重新开启后旧文件恢复使用。"""
+    d = tempfile.mkdtemp()
+    kg = os.path.join(d, "known_good.json")
+    m = ProxyManager(known_good_path=kg)  # 默认开启
+    m._save_known_good([{"host": "1.1.1.1", "port": 1080, "tg_ok": True,
+                         "tg_latency_ms": 500}])
+    assert os.path.isfile(kg)
+    merged, seen = [], set()
+    assert m._merge_known_good(merged, seen)
+
+    m.set_known_good_enabled(False)
+    mt_before = os.path.getmtime(kg)
+    m._save_known_good([{"host": "2.2.2.2", "port": 1080, "tg_ok": True,
+                         "tg_latency_ms": 400}])
+    assert os.path.getmtime(kg) == mt_before  # 关闭态不写盘
+    merged2, seen2 = [], set()
+    assert not m._merge_known_good(merged2, seen2)  # 关闭态不补入
+
+    m.set_known_good_enabled(True)
+    merged3, seen3 = [], set()
+    m._merge_known_good(merged3, seen3)
+    assert len(merged3) == 1 and merged3[0]["host"] == "1.1.1.1"  # 旧文件恢复使用
 
 
 def test_four_sources_three_zero_protected():

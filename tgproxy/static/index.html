@@ -70,6 +70,9 @@
   .source-note { flex: none; }
   .source-notice { font-size: 12px; color: #92400e; background: #fef3c7;
     border: 1px solid #fcd34d; border-radius: 6px; padding: 4px 8px; margin-bottom: 4px; }
+  .kg-switch { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
+    color: #374151; white-space: nowrap; }
+  .kg-switch input { margin: 0; }
   .tg-btn { font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid #229ed9;
     color: #229ed9; background: transparent; cursor: pointer; white-space: nowrap; }
   .tg-btn:hover { background: #229ed9; color: #fff; }
@@ -178,6 +181,8 @@
       <input id="interval-input" type="number" min="1" max="1440" step="1" value="10">
       <label for="tg-limit-input">TG 延迟上限（毫秒，超限剔除）</label>
       <input id="tg-limit-input" type="number" min="500" max="60000" step="100" value="1000">
+      <label class="kg-switch"><input id="kg-enabled-input" type="checkbox" checked>
+        自动保存可用节点（known_good）</label>
       <button id="save-interval-btn" class="btn" type="button">保存</button>
       <span id="settings-msg" class="settings-msg"></span>
     </div>
@@ -365,6 +370,7 @@
         state.settings = data;
         $("interval-input").value = data.interval_minutes;
         $("tg-limit-input").value = data.max_tg_latency_ms;
+        $("kg-enabled-input").checked = !!data.known_good_enabled;
         renderSourceUrls(data.proxy_list_urls || []);
       })
       .catch(function () { /* 忽略，使用输入框默认值 */ });
@@ -437,7 +443,8 @@
     fetchJson("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interval_minutes: value, max_tg_latency_ms: tgLimit })
+      body: JSON.stringify({ interval_minutes: value, max_tg_latency_ms: tgLimit,
+        known_good_enabled: $("kg-enabled-input").checked })
     })
       .then(function (data) {
         if (data && data.ok) {
