@@ -174,25 +174,32 @@ GOLDEN_PATH = os.path.join(os.path.dirname(__file__), "vectors.json")
 
 
 def build_results():
-    """对全部向量跑 parse_proxy_text，产出可 JSON 化的逐字段结果。"""
+    """对全部向量固化「输入 + 期望输出」契约。
+
+    input 供 Python 侧与 Kotlin 侧（ProxyParserGoldenTest）用同一份 vectors.json
+    重放解析；expected 为固化时的 parse_proxy_text 逐字段输出。
+    """
     results = {}
     for name, text in VECTORS.items():
         entries, excluded, dropped = parse_proxy_text(text)
         results[name] = {
-            "entries": [
-                {
-                    "link": e["link"],
-                    "host": e["host"],
-                    "port": e["port"],
-                    "type": e["type"],
-                    "location": e["location"],
-                    "isp": e["isp"],
-                    "added_at": e["added_at"],
-                }
-                for e in entries
-            ],
-            "excluded": excluded,
-            "dropped": dropped,
+            "input": text,
+            "expected": {
+                "entries": [
+                    {
+                        "link": e["link"],
+                        "host": e["host"],
+                        "port": e["port"],
+                        "type": e["type"],
+                        "location": e["location"],
+                        "isp": e["isp"],
+                        "added_at": e["added_at"],
+                    }
+                    for e in entries
+                ],
+                "excluded": excluded,
+                "dropped": dropped,
+            },
         }
     return results
 
@@ -208,11 +215,30 @@ def test_parse_vectors():
         golden = json.load(fh)
     assert set(current) == set(golden), "向量集合不一致：%r" % (
         set(current) ^ set(golden),)
-    for name in golden:
-        assert current[name] == golden[name], (
+    for name, record in golden.items():
+        fresh_entries, fresh_excluded, fresh_dropped = parse_proxy_text(
+            record["input"]
+        )
+        fresh = {
+            "entries": [
+                {
+                    "link": e["link"],
+                    "host": e["host"],
+                    "port": e["port"],
+                    "type": e["type"],
+                    "location": e["location"],
+                    "isp": e["isp"],
+                    "added_at": e["added_at"],
+                }
+                for e in fresh_entries
+            ],
+            "excluded": fresh_excluded,
+            "dropped": fresh_dropped,
+        }
+        assert fresh == record["expected"], (
             "向量 %s 的解析结果偏离 golden；当前: %s；golden: %s"
-            % (name, json.dumps(current[name], ensure_ascii=False),
-               json.dumps(golden[name], ensure_ascii=False))
+            % (name, json.dumps(fresh, ensure_ascii=False),
+               json.dumps(record["expected"], ensure_ascii=False))
         )
 
 

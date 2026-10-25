@@ -1,426 +1,474 @@
 {
  "V1_realistic_sample": {
-  "entries": [
-   {
-    "link": "socks5://77.51.100.200:1080",
-    "host": "77.51.100.200",
-    "port": 1080,
-    "type": "socks5",
-    "location": "荷兰 北荷兰省 阿姆斯特丹",
-    "isp": "DigitalOcean",
-    "added_at": "10-21 22:58"
-   },
-   {
-    "link": "socks5://77.51.101.201:1080",
-    "host": "77.51.101.201",
-    "port": 1080,
-    "type": "socks5",
-    "location": "日本 东京",
-    "isp": "IIJ",
-    "added_at": "10-22 09:05"
-   },
-   {
-    "link": "socks5://103.102.44.55:4145",
-    "host": "103.102.44.55",
-    "port": 4145,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 0
+  "input": "socks5://77.51.100.200:1080 入库时间：10-21 22:58 [热门] 荷兰 北荷兰省 阿姆斯特丹 — DigitalOcean\nsocks5://77.51.101.201:1080 入库时间:10-22 09:05 日本 东京 — IIJ\nsocks5://103.102.44.55:4145\n# 注释行\n\n   \n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://77.51.100.200:1080",
+     "host": "77.51.100.200",
+     "port": 1080,
+     "type": "socks5",
+     "location": "荷兰 北荷兰省 阿姆斯特丹",
+     "isp": "DigitalOcean",
+     "added_at": "10-21 22:58"
+    },
+    {
+     "link": "socks5://77.51.101.201:1080",
+     "host": "77.51.101.201",
+     "port": 1080,
+     "type": "socks5",
+     "location": "日本 东京",
+     "isp": "IIJ",
+     "added_at": "10-22 09:05"
+    },
+    {
+     "link": "socks5://103.102.44.55:4145",
+     "host": "103.102.44.55",
+     "port": 4145,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 0
+  }
  },
  "V2_masked_ip": {
-  "entries": [],
-  "excluded": 0,
-  "dropped": 3
+  "input": "socks5://77.51.X.128:1080\nsocks5://77.51.100.X:1080\nsocks5://X.2.3.4:1080\n",
+  "expected": {
+   "entries": [],
+   "excluded": 0,
+   "dropped": 3
+  }
  },
  "V3_no_port": {
-  "entries": [],
-  "excluded": 0,
-  "dropped": 3
+  "input": "socks5://1.2.3.4\nhttp://1.2.3.4\nsocks5://1.2.3.4:  \n",
+  "expected": {
+   "entries": [],
+   "excluded": 0,
+   "dropped": 3
+  }
  },
  "V4_bad_ports": {
-  "entries": [
-   {
-    "link": "socks5://1.2.3.4:65535",
-    "host": "1.2.3.4",
-    "port": 65535,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 5
+  "input": "socks5://1.2.3.4:0\nsocks5://1.2.3.4:65536\nsocks5://1.2.3.4:abc\nsocks5://1.2.3.4:123456\nsocks5://1.2.3.4:-1\nsocks5://1.2.3.4:65535\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://1.2.3.4:65535",
+     "host": "1.2.3.4",
+     "port": 65535,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 5
+  }
  },
  "V5_leading_zero_ip": {
-  "entries": [
-   {
-    "link": "socks5://1.2.3.04:1080",
-    "host": "1.2.3.04",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://01.2.3.4:1080",
-    "host": "01.2.3.4",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 2
+  "input": "socks5://1.2.3.04:1080\nsocks5://01.2.3.4:1080\nsocks5://1.2.3.256:1080\nsocks5://1.2.3.999:1080\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://1.2.3.04:1080",
+     "host": "1.2.3.04",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://01.2.3.4:1080",
+     "host": "01.2.3.4",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 2
+  }
  },
  "V6_comments_no_scheme": {
-  "entries": [
-   {
-    "link": "socks5://1.2.3.4:1080",
-    "host": "1.2.3.4",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 3
+  "input": "# full line comment\n1.2.3.4:1080\nsocks5:1.2.3.4:1080\n://1.2.3.4:1080\nsocks5://\n\t\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://1.2.3.4:1080",
+     "host": "1.2.3.4",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 3
+  }
  },
  "V7_dup_hostport": {
-  "entries": [
-   {
-    "link": "socks5://1.2.3.4:1080",
-    "host": "1.2.3.4",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "tg://proxy?server=9.9.9.9&port=1080&secret=abc",
-    "host": "9.9.9.9",
-    "port": 1080,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 1,
-  "dropped": 0
+  "input": "socks5://1.2.3.4:1080\nsocks5://1.2.3.4:1080\ntg://proxy?server=1.2.3.4&port=1080&secret=abc\ntg://proxy?server=9.9.9.9&port=1080&secret=abc\nsocks5://9.9.9.9:1080\nhttp://1.2.3.4:1080\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://1.2.3.4:1080",
+     "host": "1.2.3.4",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "tg://proxy?server=9.9.9.9&port=1080&secret=abc",
+     "host": "9.9.9.9",
+     "port": 1080,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 1,
+   "dropped": 0
+  }
  },
  "V8_mtproto_forms": {
-  "entries": [
-   {
-    "link": "tg://proxy?server=10.0.0.1&port=443&secret=aa",
-    "host": "10.0.0.1",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "https://t.me/proxy?server=10.0.0.2&port=443&secret=bb",
-    "host": "10.0.0.2",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "http://t.me/proxy?server=10.0.0.3&port=443&secret=cc",
-    "host": "10.0.0.3",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "https://www.t.me/proxy?server=10.0.0.4&port=443&secret=dd",
-    "host": "10.0.0.4",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 5
+  "input": "tg://proxy?server=10.0.0.1&port=443&secret=aa\nhttps://t.me/proxy?server=10.0.0.2&port=443&secret=bb\nhttp://t.me/proxy?server=10.0.0.3&port=443&secret=cc\nhttps://www.t.me/proxy?server=10.0.0.4&port=443&secret=dd\nhttps://example.com/t.me/proxy?server=10.0.0.5&port=443&secret=ee\nhttps://t.me.evil.com/proxy?server=10.0.0.6&port=443&secret=ff\nhttps://t.me/joinchat/abc\nhttps://t.me/proxy\nhttp://not.t.me/proxy?server=10.0.0.7&port=443&secret=gg\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "tg://proxy?server=10.0.0.1&port=443&secret=aa",
+     "host": "10.0.0.1",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "https://t.me/proxy?server=10.0.0.2&port=443&secret=bb",
+     "host": "10.0.0.2",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "http://t.me/proxy?server=10.0.0.3&port=443&secret=cc",
+     "host": "10.0.0.3",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "https://www.t.me/proxy?server=10.0.0.4&port=443&secret=dd",
+     "host": "10.0.0.4",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 5
+  }
  },
  "V9_case_mixed": {
-  "entries": [
-   {
-    "link": "https://T.ME/PROXY?server=10.0.0.1&port=443&secret=aa",
-    "host": "10.0.0.1",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "tg://PROXY?server=10.0.0.2&port=443&secret=bb",
-    "host": "10.0.0.2",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://10.0.0.3:1080",
-    "host": "10.0.0.3",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 0
+  "input": "HTTPS://T.ME/PROXY?server=10.0.0.1&port=443&secret=aa\nTG://PROXY?server=10.0.0.2&port=443&secret=bb\nSOCKS5://10.0.0.3:1080\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "https://T.ME/PROXY?server=10.0.0.1&port=443&secret=aa",
+     "host": "10.0.0.1",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "tg://PROXY?server=10.0.0.2&port=443&secret=bb",
+     "host": "10.0.0.2",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://10.0.0.3:1080",
+     "host": "10.0.0.3",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 0
+  }
  },
  "V10_meta_separators": {
-  "entries": [
-   {
-    "link": "socks5://1.1.1.1:1080",
-    "host": "1.1.1.1",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区A",
-    "isp": "ISP-A",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://2.2.2.2:1080",
-    "host": "2.2.2.2",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区B",
-    "isp": "ISP-B",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://3.3.3.3:1080",
-    "host": "3.3.3.3",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区C",
-    "isp": "ISP-C",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://4.4.4.4:1080",
-    "host": "4.4.4.4",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区D",
-    "isp": "ISP-D",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://5.5.5.5:1080",
-    "host": "5.5.5.5",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区E",
-    "isp": "ISP-E",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://6.6.6.6:1080",
-    "host": "6.6.6.6",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区F",
-    "isp": "ISP-F 额外尾巴",
-    "added_at": "01-02 03:04"
-   },
-   {
-    "link": "socks5://7.7.7.7:1080",
-    "host": "7.7.7.7",
-    "port": 1080,
-    "type": "socks5",
-    "location": "只有地区没有ISP",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 0
+  "input": "socks5://1.1.1.1:1080 地区A — ISP-A\nsocks5://2.2.2.2:1080 地区B —ISP-B\nsocks5://3.3.3.3:1080 地区C— ISP-C\nsocks5://4.4.4.4:1080 地区D—ISP-D\nsocks5://5.5.5.5:1080 地区E - ISP-E\nsocks5://6.6.6.6:1080 入库时间：01-02 03:04 [标签一] [标签二] 地区F — ISP-F 额外尾巴\nsocks5://7.7.7.7:1080 只有地区没有ISP\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://1.1.1.1:1080",
+     "host": "1.1.1.1",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区A",
+     "isp": "ISP-A",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://2.2.2.2:1080",
+     "host": "2.2.2.2",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区B",
+     "isp": "ISP-B",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://3.3.3.3:1080",
+     "host": "3.3.3.3",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区C",
+     "isp": "ISP-C",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://4.4.4.4:1080",
+     "host": "4.4.4.4",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区D",
+     "isp": "ISP-D",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://5.5.5.5:1080",
+     "host": "5.5.5.5",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区E",
+     "isp": "ISP-E",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://6.6.6.6:1080",
+     "host": "6.6.6.6",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区F",
+     "isp": "ISP-F 额外尾巴",
+     "added_at": "01-02 03:04"
+    },
+    {
+     "link": "socks5://7.7.7.7:1080",
+     "host": "7.7.7.7",
+     "port": 1080,
+     "type": "socks5",
+     "location": "只有地区没有ISP",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 0
+  }
  },
  "V11_empty_and_null": {
-  "entries": [],
-  "excluded": 0,
-  "dropped": 0
+  "input": "",
+  "expected": {
+   "entries": [],
+   "excluded": 0,
+   "dropped": 0
+  }
  },
  "V11b_null": {
-  "entries": [],
-  "excluded": 0,
-  "dropped": 0
+  "input": null,
+  "expected": {
+   "entries": [],
+   "excluded": 0,
+   "dropped": 0
+  }
  },
  "V12_excluded_dedup": {
-  "entries": [],
-  "excluded": 5,
-  "dropped": 3
+  "input": "http://1.1.1.1:8080\nhttps://1.1.1.1:8080\nss://2.2.2.2:8388\nvmess://3.3.3.3:10086\nvless://4.4.4.4:443\ntrojan://5.5.5.5:443\nhttp://example.com:8080\nhttps://1.2.3.4\nss://\n",
+  "expected": {
+   "entries": [],
+   "excluded": 5,
+   "dropped": 3
+  }
  },
  "V13_mixed_big": {
-  "entries": [
-   {
-    "link": "socks5://10.0.0.1:1080",
-    "host": "10.0.0.1",
-    "port": 1080,
-    "type": "socks5",
-    "location": "香港",
-    "isp": "HGC",
-    "added_at": "10-21 22:58"
-   },
-   {
-    "link": "socks5://10.0.0.2:1080",
-    "host": "10.0.0.2",
-    "port": 1080,
-    "type": "socks5",
-    "location": "日本",
-    "isp": "IIJ",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://10.0.0.3:1080",
-    "host": "10.0.0.3",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "tg://proxy?server=10.0.0.4&port=443&secret=dd1234567890",
-    "host": "10.0.0.4",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "https://t.me/proxy?server=10.0.0.5&port=443&secret=ee1234567890",
-    "host": "10.0.0.5",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "tg://proxy?server=13.0.0.1&port=443&secret=ff",
-    "host": "13.0.0.1",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://1.2.3.4:1080",
-    "host": "1.2.3.4",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 5,
-  "dropped": 6
+  "input": "# 代理列表\nsocks5://10.0.0.1:1080 入库时间：10-21 22:58 [新] 香港 — HGC\nsocks5://10.0.0.2:1080 日本 — IIJ\nsocks5://10.0.0.3:1080\ntg://proxy?server=10.0.0.4&port=443&secret=dd1234567890\nhttps://t.me/proxy?server=10.0.0.5&port=443&secret=ee1234567890\nhttp://11.0.0.1:8080\nhttps://11.0.0.1:8080\nss://11.0.0.2:8388\nvmess://11.0.0.3:10086\nvless://11.0.0.4:443\ntrojan://11.0.0.5:443\nsocks5://12.0.0.X:1080\nsocks5://12.0.0.9:0\nsocks5://12.0.0.10:abc\ntg://proxy?server=12.0.0.11&port=443\ntg://proxy?server=12.0.0.12&port=443&secret=\ntg://proxy?server=13.0.0.1&port=443&secret=ff\n1.2.3.4:1080\nhttp://t.me/notproxy\n\nsocks5://10.0.0.1:1080\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://10.0.0.1:1080",
+     "host": "10.0.0.1",
+     "port": 1080,
+     "type": "socks5",
+     "location": "香港",
+     "isp": "HGC",
+     "added_at": "10-21 22:58"
+    },
+    {
+     "link": "socks5://10.0.0.2:1080",
+     "host": "10.0.0.2",
+     "port": 1080,
+     "type": "socks5",
+     "location": "日本",
+     "isp": "IIJ",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://10.0.0.3:1080",
+     "host": "10.0.0.3",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "tg://proxy?server=10.0.0.4&port=443&secret=dd1234567890",
+     "host": "10.0.0.4",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "https://t.me/proxy?server=10.0.0.5&port=443&secret=ee1234567890",
+     "host": "10.0.0.5",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "tg://proxy?server=13.0.0.1&port=443&secret=ff",
+     "host": "13.0.0.1",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://1.2.3.4:1080",
+     "host": "1.2.3.4",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 5,
+   "dropped": 6
+  }
  },
  "V14_query_details": {
-  "entries": [
-   {
-    "link": "tg://proxy?server=10.0.0.1&port=443&secret=a%20b",
-    "host": "10.0.0.1",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "tg://proxy?server=10.0.0.2&port=443&secret=hello+world",
-    "host": "10.0.0.2",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "tg://proxy?server=10.0.0.3&server=10.9.9.9&port=443&secret=x",
-    "host": "10.0.0.3",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "tg://proxy?server=10.0.0.4&port=443&secret=x#frag",
-    "host": "10.0.0.4",
-    "port": 443,
-    "type": "mtproto",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   }
-  ],
-  "excluded": 0,
-  "dropped": 2
+  "input": "tg://proxy?server=10.0.0.1&port=443&secret=a%20b\ntg://proxy?server=10.0.0.2&port=443&secret=hello+world\ntg://proxy?server=10.0.0.3&server=10.9.9.9&port=443&secret=x\ntg://proxy?server=10.0.0.4&port=443&secret=x#frag\ntg://proxy?server&port=443&secret=x\ntg://proxy?port=443&secret=x\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "tg://proxy?server=10.0.0.1&port=443&secret=a%20b",
+     "host": "10.0.0.1",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "tg://proxy?server=10.0.0.2&port=443&secret=hello+world",
+     "host": "10.0.0.2",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "tg://proxy?server=10.0.0.3&server=10.9.9.9&port=443&secret=x",
+     "host": "10.0.0.3",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "tg://proxy?server=10.0.0.4&port=443&secret=x#frag",
+     "host": "10.0.0.4",
+     "port": 443,
+     "type": "mtproto",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    }
+   ],
+   "excluded": 0,
+   "dropped": 2
+  }
  },
  "V15_whitespace": {
-  "entries": [
-   {
-    "link": "socks5://1.2.3.4:1080",
-    "host": "1.2.3.4",
-    "port": 1080,
-    "type": "socks5",
-    "location": "",
-    "isp": "",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://2.3.4.5:1080",
-    "host": "2.3.4.5",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区",
-    "isp": "ISP",
-    "added_at": ""
-   },
-   {
-    "link": "socks5://3.4.5.6:1080",
-    "host": "3.4.5.6",
-    "port": 1080,
-    "type": "socks5",
-    "location": "地区",
-    "isp": "ISP",
-    "added_at": "10-21 22:58"
-   }
-  ],
-  "excluded": 0,
-  "dropped": 0
+  "input": "   socks5://1.2.3.4:1080   \n\tsocks5://2.3.4.5:1080\t地区\t—\tISP\nsocks5://3.4.5.6:1080    入库时间：  10-21   22:58   地区 — ISP\n",
+  "expected": {
+   "entries": [
+    {
+     "link": "socks5://1.2.3.4:1080",
+     "host": "1.2.3.4",
+     "port": 1080,
+     "type": "socks5",
+     "location": "",
+     "isp": "",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://2.3.4.5:1080",
+     "host": "2.3.4.5",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区",
+     "isp": "ISP",
+     "added_at": ""
+    },
+    {
+     "link": "socks5://3.4.5.6:1080",
+     "host": "3.4.5.6",
+     "port": 1080,
+     "type": "socks5",
+     "location": "地区",
+     "isp": "ISP",
+     "added_at": "10-21 22:58"
+    }
+   ],
+   "excluded": 0,
+   "dropped": 0
+  }
  }
 }
