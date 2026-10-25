@@ -64,6 +64,11 @@ SOURCE_CANDIDATES = [
 SOURCE_PARK_FAILS = 3
 SOURCE_PARK_ZERO_ROUNDS = 3
 SOURCE_HIST_KEEP = 5
+# 环境异常判定：成功抓取的源中 0 产出占比 >= 80% 时，判为 Telegram 封锁/门槛调严
+# （而非「源变垃圾」），本轮不累计零产出、不停用、不补位
+SOURCE_GLOBAL_ZERO_RATIO = 0.8
+# 全局抽样时每个源的保底条数：防小源被随机抽样整源抽空，被体检误读为「0 产出」
+SOURCE_SAMPLE_FLOOR = 10
 # TG 实测延迟门槛：超过该值视为「太慢不可用」剔除（默认 1s；界面可调 500~60000）
 TG_LATENCY_LIMIT_MS = 1000
 # raw.githubusercontent.com 直连失败时依次尝试的镜像（按国内可达性排序）
@@ -562,20 +567,26 @@ class ProxyManager:
     def set_proxy_list_urls(self, urls):
         """热更新数据源列表（下次刷新生效）。
 
-        手动编辑视为对源列表的「重新观察」：本次写入的 URL 若此前被自动体检
-        停用（parked），清除其 parked/hist/fails，给源一次全新的评估机会。
+        手动编辑按 per-URL diff 宽恕：**只清除本次新增 URL** 的 parked/hist/fails
+        （重新观察），未改动的源其健康历史保持不变；读改写在 _lock 内完成，
+        避免与刷新线程的体检写盘互相覆盖。
         """
+        new_urls = list(urls) if urls else list(DEFAULT_PROXY_LIST_URLS)
         with self._lock:
-            self._proxy_list_urls = list(urls) if urls else list(DEFAULT_PROXY_LIST_URLS)
-        health = self._load_source_health()
-        forgiven = False
-        for url in self._proxy_list_urls:
-            h = health.get(url)
-            if h and (h.get("parked") or h.get("hist") or h.get("fails")):
-                health[url] = {"hist": [], "fails": 0, "parked": None}
-                forgiven = True
-        if forgiven:
-            self._save_source_health(health)
+            old_urls = set(self._proxy_list_urls)
+            self._proxy_list_urls = new_urls
+            added = [u for u in new_urls if u not in old_urls]
+            if not added:
+                return
+            health = self._load_source_health()
+            changed = False
+            for url in added:
+                h = health.get(url)
+                if h and (h.get("parked") or h.get("hist") or h.get("fails")):
+                    health[url] = {"hist": [], "fails": 0, "parked": None}
+                    changed = True
+            if changed:
+                self._save_source_health(health)
 
     def set_max_tg_latency_ms(self, value):
         """热更新 TG 实测延迟门槛（下次刷新生效）。"""
@@ -675,8 +686,22 @@ class ProxyManager:
         if len(merged) > MAX_TOTAL:
             preferred = [e for e in merged if (e["host"], e["port"]) in preferred_keys]
             rest = [e for e in merged if (e["host"], e["port"]) not in preferred_keys]
-            keep_n = max(0, MAX_TOTAL - len(preferred))
-            merged = preferred + random.sample(rest, min(len(rest), keep_n))
+            # 每源保底：全局抽样时每个源先各留 SOURCE_SAMPLE_FLOOR 条，
+            # 防小源被整源抽空而被体检误读为「0 产出」
+            by_src = {}
+            for entry in rest:
+                by_src.setdefault(entry.get("_src"), []).append(entry)
+            floor_entries = []
+            floor_keys = set()
+            for _src_url, lst in by_src.items():
+                take = lst if len(lst) <= SOURCE_SAMPLE_FLOOR \
+                    else random.sample(lst, SOURCE_SAMPLE_FLOOR)
+                floor_entries.extend(take)
+                floor_keys.update((e["host"], e["port"]) for e in take)
+            pool = [e for e in rest if (e["host"], e["port"]) not in floor_keys]
+            keep_n = max(0, MAX_TOTAL - len(preferred) - len(floor_entries))
+            merged = preferred + floor_entries \
+                + random.sample(pool, min(len(pool), keep_n))
         tested = self._test_entries(merged)
         # 第一阶段：TCP 通的才进入第二阶段
         tcp_ok = [item for item in tested if item["status"] == "available"]
@@ -809,6 +834,24 @@ class ProxyManager:
         except OSError:
             pass
 
+    def forgive_sources(self, urls):
+        """对给定 URL 中的「被停用源」执行宽恕（清 parked/hist/fails，重新观察）。
+
+        供 main() 启动时调用：用户手动编辑 config.json 加回被停用的源后，
+        重启应用即生效。只动被停用的源，健康源的历史不受影响。
+        """
+        with self._lock:
+            health = self._load_source_health()
+            changed = False
+            for url in urls:
+                h = health.get(url)
+                if h and h.get("parked"):
+                    health[url] = {"hist": [], "fails": 0, "parked": None}
+                    changed = True
+            if changed:
+                self._save_source_health(health)
+            return changed
+
     def _load_source_health(self):
         """读取逐源健康度（source_health.json；缺失/损坏返回空表）。"""
         if not self._source_health_path or not os.path.isfile(self._source_health_path):
@@ -842,13 +885,14 @@ class ProxyManager:
         health = self._load_source_health()
         with self._lock:
             active = list(self._proxy_list_urls)
-        # 全局 0 产出判定：所有成功抓取的源本轮 TG 验证产出全为 0，
-        # 判为环境异常（Telegram 封锁 / 门槛调严）而非「源变垃圾」——
-        # 本轮不累计零产出轮次、不停用、不补位，避免把用户的源全部换掉。
+        # 环境异常判定（比例口径）：成功抓取的源中 0 产出占比 >= 80%，
+        # 判为 Telegram 封锁 / 门槛调严而非「源变垃圾」——本轮不累计零产出、
+        # 不停用、不补位，避免部分劣化（还有个别源活着）时把用户的源全部换掉。
         ok_sources = [r for r in sources if r["status"] == "ok"]
-        global_zero = bool(ok_sources) and all(
-            per_src_verified.get(r["url"], 0) == 0 for r in ok_sources
+        zero_cnt = sum(
+            1 for r in ok_sources if per_src_verified.get(r["url"], 0) == 0
         )
+        global_zero = bool(ok_sources) and zero_cnt >= len(ok_sources) * SOURCE_GLOBAL_ZERO_RATIO
         parked_now = []
         for record in sources:
             url = record["url"]
@@ -860,11 +904,13 @@ class ProxyManager:
                     h["parked"] = "连续 %d 轮抓取失败" % h["fails"]
             else:
                 h["fails"] = 0
-                if global_zero:
-                    # 环境异常轮：不累计零产出（历史保持不变），且暂停停用判定
+                verified_now = int(per_src_verified.get(url, 0))
+                if global_zero and verified_now == 0:
+                    # 环境异常轮：零产出不累计（历史保持不变），暂停停用判定；
+                    # 有产出的源照常记录，便于区分「个别源还行」的情况
                     continue
                 hist = [int(x) for x in (h.get("hist") or [])]
-                hist = hist[-(SOURCE_HIST_KEEP - 1):] + [int(per_src_verified.get(url, 0))]
+                hist = hist[-(SOURCE_HIST_KEEP - 1):] + [verified_now]
                 h["hist"] = hist
                 tail = hist[-SOURCE_PARK_ZERO_ROUNDS:]
                 if len(tail) >= SOURCE_PARK_ZERO_ROUNDS and all(x == 0 for x in tail) \
@@ -902,9 +948,15 @@ class ProxyManager:
                 except Exception:
                     pass  # 配置持久化失败不影响运行；下次刷新会再次尝试
         self._save_source_health(health)
-        if global_zero and not replaced:
-            return "本轮全部源 0 个 TG 可用节点，疑似网络/门槛问题，已暂停自动换源"
-        return "源自动体检：" + "；".join(replaced) if replaced else None
+        parts = []
+        if global_zero:
+            parts.append(
+                "本轮 %d/%d 个源 0 个 TG 可用节点（占比过高），疑似网络/门槛问题，已暂停自动换源"
+                % (zero_cnt, len(ok_sources))
+            )
+        if replaced:
+            parts.append("源自动体检：" + "；".join(replaced))
+        return "；".join(parts) if parts else None
 
     def find_entry(self, host, port):
         """按 host:port 查当前可用列表中的代理（供一键唤起 Telegram），无则返回 None。"""

@@ -487,6 +487,8 @@ def main():
         source_health_path=os.path.join(BASE_DIR, "source_health.json"),
         on_sources_changed=persist_active_urls,
     )
+    # 用户手动编辑 config.json 加回被停用的源后，重启即宽恕（重新观察）
+    manager.forgive_sources(config["proxy_list_urls"])
     server, port = create_server(ApiHandler, manager, config)
     config["port"] = port
     save_config(config)
