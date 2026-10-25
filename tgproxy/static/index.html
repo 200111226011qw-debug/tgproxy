@@ -68,6 +68,8 @@
   .source-link { color: #4b5563; text-decoration: none; word-break: break-all; }
   .source-link:hover { color: #2563eb; text-decoration: underline; }
   .source-note { flex: none; }
+  .source-notice { font-size: 12px; color: #92400e; background: #fef3c7;
+    border: 1px solid #fcd34d; border-radius: 6px; padding: 4px 8px; margin-bottom: 4px; }
   .tg-btn { font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid #229ed9;
     color: #229ed9; background: transparent; cursor: pointer; white-space: nowrap; }
   .tg-btn:hover { background: #229ed9; color: #fff; }
@@ -207,7 +209,8 @@
   </section>
 
   <footer class="page-footer">
-    <div class="muted source-caption">数据源（GitHub 直连失败时自动走 jsDelivr 镜像）：</div>
+    <div class="muted source-caption">数据源（自动体检：连续 3 轮抓取失败或 0 产出会停用并从候选池补位；GitHub 直连失败时自动走 jsDelivr 镜像）：</div>
+    <div id="source-notice" class="source-notice" hidden></div>
     <div id="source-urls" class="source-urls"><span class="muted">加载中…</span></div>
   </footer>
 </div>
@@ -319,6 +322,7 @@
     renderStats(data.stats);
     renderProxies(data.proxies);
     renderSources(data.sources);
+    renderNotice(data.notice);
     updatedAtEl.textContent = "更新时间：" + (data.updated_at || "--");
     if (data.error) {
       errorBanner.textContent = data.error;
@@ -389,6 +393,17 @@
       row.appendChild(note);
       box.appendChild(row);
     });
+  }
+
+  function renderNotice(notice) {
+    var box = $("source-notice");
+    if (!box) { return; }
+    if (notice) {
+      box.textContent = notice;
+      box.hidden = false;
+    } else {
+      box.hidden = true;
+    }
   }
 
   function renderSources(sources) {

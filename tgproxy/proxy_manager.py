@@ -47,6 +47,23 @@ TG_TEST_TIMEOUT_SEC = 8.0
 TG_TEST_MAX_WORKERS = 100
 # 单节点 TG 实测总预算（秒）：两关串行共享，防个别节点拖垮整轮
 TG_TEST_DEADLINE_SEC = 20.0
+# 候选源池：活跃源「变垃圾」被停用后按顺序自动补位（含爬虫源，由 crawl_extract 处理）
+SOURCE_CANDIDATES = [
+    "https://proxyspace.pro/socks5.txt",
+    "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt",
+    "https://proxylist.geonode.com/api/proxy-list?protocols=socks5&limit=500&page=1&sort_by=latency&sort_type=asc",
+    "https://www.socks-proxy.net/",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS5_RAW.txt",
+    "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-socks5.txt",
+    "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+    "https://raw.githubusercontent.com/zevtyardt/proxy-list/main/socks5.txt",
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/socks5/data.txt",
+    "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt",
+]
+# 源体检：连续 N 轮抓取失败，或最近 N 个有产出的轮次全部 0 个 TG 可用节点 -> 停用并补位
+SOURCE_PARK_FAILS = 3
+SOURCE_PARK_ZERO_ROUNDS = 3
+SOURCE_HIST_KEEP = 5
 # TG 实测延迟门槛：超过该值视为「太慢不可用」剔除（默认 1s；界面可调 500~60000）
 TG_LATENCY_LIMIT_MS = 1000
 # raw.githubusercontent.com 直连失败时依次尝试的镜像（按国内可达性排序）
@@ -525,11 +542,15 @@ class ProxyManager:
     """代理状态管理：多源抓取 -> 合并去重 -> 抽样 -> 并发测试 -> 供 API 读取。"""
 
     def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS,
-                 known_good_path=None):
+                 known_good_path=None, source_health_path=None,
+                 on_sources_changed=None):
         self._lock = threading.Lock()
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
         self._max_tg_latency_ms = max_tg_latency_ms
         self._known_good_path = known_good_path
+        self._source_health_path = source_health_path
+        self._on_sources_changed = on_sources_changed
+        self._notice = None
         self._proxies = []
         self._sources = []
         self._stats = {"available": 0, "unverified": 0, "tg_failed": 0, "dropped": 0,
@@ -555,6 +576,7 @@ class ProxyManager:
                 "updated_at": self._updated_at,
                 "fetching": self._fetching,
                 "error": self._error,
+                "notice": self._notice,
                 "stats": dict(self._stats),
                 "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
@@ -626,6 +648,7 @@ class ProxyManager:
                 key = (entry["host"], entry["port"])
                 if key not in seen:
                     seen.add(key)
+                    entry["_src"] = record["url"]  # 逐源归属：TG 验证后计健康度
                     merged.append(entry)
                     kept += 1
             record["kept"] = kept
@@ -656,6 +679,13 @@ class ProxyManager:
         ]
         # tg_failed 含两关未过与超门槛（「含超慢」口径），保证四项统计之和 = 本轮测试总数
         tg_failed = len(verified) - len(unverified) - len(kept)
+        # 逐源健康度：每个源本轮贡献的 TG 验证通过数（按合并时首次归属）
+        per_src_verified = {}
+        for item in verified:
+            if item["tg_ok"] is True and item["tg_latency_ms"] is not None \
+                    and item["tg_latency_ms"] <= self._max_tg_latency_ms:
+                per_src_verified[item["_src"]] = per_src_verified.get(item["_src"], 0) + 1
+        notice = self._update_source_health(sources, per_src_verified)
         with self._lock:
             previous = self._proxies
             if kept:
@@ -674,6 +704,7 @@ class ProxyManager:
                 "excluded": excluded_total + dropped_total,
             }
             self._updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._notice = notice
             if failures and len(failures) == len(urls):
                 if kept:
                     self._error = (
@@ -690,6 +721,10 @@ class ProxyManager:
                     self._max_tg_latency_ms)
             else:
                 self._error = None
+        for item in kept:
+            item.pop("_src", None)
+        for item in unverified:
+            item.pop("_src", None)
         # 沉淀本轮验证通过的节点，供下轮优先复测（锁外落盘）
         if kept:
             self._save_known_good(kept)
@@ -756,6 +791,91 @@ class ProxyManager:
                 json.dump(records[:200], fh, ensure_ascii=False, indent=1)
         except OSError:
             pass
+
+    def _load_source_health(self):
+        """读取逐源健康度（source_health.json；缺失/损坏返回空表）。"""
+        if not self._source_health_path or not os.path.isfile(self._source_health_path):
+            return {}
+        try:
+            with open(self._source_health_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_source_health(self, health):
+        """落盘逐源健康度（写盘失败不影响运行）。"""
+        if not self._source_health_path:
+            return
+        try:
+            with open(self._source_health_path, "w", encoding="utf-8") as fh:
+                json.dump(health, fh, ensure_ascii=False, indent=1)
+        except OSError:
+            pass
+
+    def _update_source_health(self, sources, per_src_verified):
+        """逐源体检：更新健康度；连续失败或连续 0 产出的源停用，并从候选池补位。
+
+        - 连续 SOURCE_PARK_FAILS 轮抓取失败 -> 停用
+        - 最近 SOURCE_PARK_ZERO_ROUNDS 个有产出的轮次全部 0 个 TG 可用节点 -> 停用
+        - 停用后按 SOURCE_CANDIDATES 顺序补位（已停用的候选不再回用）；
+          至少保留一个活跃源；变更经 on_sources_changed 回调持久化到配置。
+        返回给 UI 的 notice 文本（无变化时为 None）。
+        """
+        health = self._load_source_health()
+        with self._lock:
+            active = list(self._proxy_list_urls)
+        parked_now = []
+        for record in sources:
+            url = record["url"]
+            h = health.setdefault(url, {"hist": [], "fails": 0, "parked": None})
+            if record["status"] != "ok":
+                h["fails"] = int(h.get("fails", 0)) + 1
+                h["last_error"] = str(record.get("error") or "")[:120]
+                if h["fails"] >= SOURCE_PARK_FAILS and not h.get("parked"):
+                    h["parked"] = "连续 %d 轮抓取失败" % h["fails"]
+            else:
+                h["fails"] = 0
+                hist = [int(x) for x in (h.get("hist") or [])]
+                hist = hist[-(SOURCE_HIST_KEEP - 1):] + [int(per_src_verified.get(url, 0))]
+                h["hist"] = hist
+                tail = hist[-SOURCE_PARK_ZERO_ROUNDS:]
+                if len(tail) >= SOURCE_PARK_ZERO_ROUNDS and all(x == 0 for x in tail) \
+                        and not h.get("parked"):
+                    h["parked"] = "连续 %d 轮 0 个 TG 可用节点" % SOURCE_PARK_ZERO_ROUNDS
+            if h.get("parked") and url in active \
+                    and url not in [u for u, _ in parked_now]:
+                parked_now.append((url, h["parked"]))
+        # 至少保留一个活跃源：仅当「无候选可补且会把活跃源清零」时撤销本轮停用
+        candidates = [c for c in SOURCE_CANDIDATES
+                      if c not in active and not health.get(c, {}).get("parked")]
+        remaining_after = len(active) - len(parked_now) + min(
+            len(parked_now), len(candidates))
+        if active and remaining_after < 1:
+            for url, _ in parked_now:
+                health[url]["parked"] = None
+            parked_now = []
+        replaced = []
+        for i, (url, reason) in enumerate(parked_now):
+            active.remove(url)
+            entry_text = "停用 %s（%s）" % (url, reason)
+            if i < len(candidates):
+                active.append(candidates[i])
+                health.setdefault(
+                    candidates[i], {"hist": [], "fails": 0, "parked": None})
+                entry_text += "，补位 %s" % candidates[i]
+            replaced.append(entry_text)
+        if replaced:
+            with self._lock:
+                self._proxy_list_urls = active
+            callback = self._on_sources_changed
+            if callback is not None:
+                try:
+                    callback(list(active))
+                except Exception:
+                    pass  # 配置持久化失败不影响运行；下次刷新会再次尝试
+        self._save_source_health(health)
+        return "源自动体检：" + "；".join(replaced) if replaced else None
 
     def find_entry(self, host, port):
         """按 host:port 查当前可用列表中的代理（供一键唤起 Telegram），无则返回 None。"""

@@ -262,10 +262,12 @@ class ProxyParserTest {
 
         val result = parser.parse(text)
 
-        // entries=6（3 socks5 + 3 MTProto，末行重复去重）；excluded=5（http/https 去重后）；dropped=7
-        assertEquals(6, result.entries.size)
+        // entries=7（3 socks5 + 3 MTProto + 裸 host:port 行按 SOCKS5 保留，末行重复去重）
+        // excluded=5（http/https 去重后）；dropped=6
+        // （与 docs/vectors.json 的 V13_mixed_big golden 一致，双端对拍）
+        assertEquals(7, result.entries.size)
         assertEquals(5, result.excludedCount)
-        assertEquals(7, result.droppedCount)
+        assertEquals(6, result.droppedCount)
         assertEquals(
             listOf(
                 "socks5://10.0.0.1:1080",
@@ -274,6 +276,7 @@ class ProxyParserTest {
                 "tg://proxy?server=10.0.0.4&port=443&secret=dd1234567890",
                 "https://t.me/proxy?server=10.0.0.5&port=443&secret=ee1234567890",
                 "tg://proxy?server=13.0.0.1&port=443&secret=ff",
+                "socks5://1.2.3.4:1080",
             ),
             result.entries.map { it.link },
         )

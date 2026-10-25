@@ -475,10 +475,17 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 def main():
     config = load_config()
+    def persist_active_urls(urls):
+        """源自动体检替换后，把活跃源列表持久化回 config.json。"""
+        settings["proxy_list_urls"] = list(urls)
+        save_config(settings)
+
     manager = ProxyManager(
         config["proxy_list_urls"],
         config["max_tg_latency_ms"],
         known_good_path=os.path.join(BASE_DIR, "known_good.json"),
+        source_health_path=os.path.join(BASE_DIR, "source_health.json"),
+        on_sources_changed=persist_active_urls,
     )
     server, port = create_server(ApiHandler, manager, config)
     config["port"] = port
