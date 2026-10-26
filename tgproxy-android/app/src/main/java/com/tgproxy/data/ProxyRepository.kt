@@ -25,9 +25,10 @@ import kotlinx.coroutines.withContext
 /**
  * 代理刷新管线编排（等价桌面版 ProxyManager._run_refresh 全流程）：
  *
- * 并发抓取 → 逐源解析/去重/抽样 → known_good 优先补入 → TCP 预筛（并发）→
- * TG 实测两关（仅 SOCKS5，经代理到 TG DC + 全链路站点）→ 1000ms 门槛 →
- * 五项统计（available+unverified+tgFailed+dropped=tested）→ known_good 沉淀。
+ * 并发抓取 → 逐源解析/去重/抽样 → known_good 优先补入 → 连续失败拉黑跳过 →
+ * TCP 预筛（并发）→ TG 实测两关（仅 SOCKS5，经代理到 TG DC + 全链路站点）→
+ * 1000ms 门槛 → 五项统计（available+unverified+tgFailed+overThreshold+dropped=tested）→
+ * known_good 沉淀 + 连败计数沉淀。
  *
  * 纯 Kotlin 无 Android 依赖（OkHttp 抓取器由构造注入），可被 JVM 单测直接构造。
  * 本类不做刷新互斥（互斥只在 ViewModel，见 ARCHITECTURE.md §8）。
@@ -37,6 +38,7 @@ class ProxyRepository(
     private val tester: LatencyTester = ProxyTester(),
     private val tgGate: TelegramGateCaller = DefaultTelegramGateCaller,
     private val knownGood: KnownGoodStore = KnownGoodStore.none(),
+    private val knownBad: KnownBadStore = KnownBadStore(file = null),
     private val tgLatencyLimitMs: Int = Constants.TG_LATENCY_LIMIT_MS,
     /** 阻塞测试的执行调度器（JVM 单测注入测试调度器避免跨线程派发竞态）。 */
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -101,21 +103,33 @@ class ProxyRepository(
         // 全局抽样至 MAX_TOTAL：preferred 优先保留，其余随机
         val sampledTotal = samplePreferred(merged, preferredKeys, Constants.MAX_TOTAL)
 
+        // 连续失败拉黑跳过：黑名单节点不参与本轮测试（48 小时后自动解封重测）
+        knownBad.load()
+        val toTest = sampledTotal.filter { !knownBad.isBlacklisted(it.host, it.port) }
+        val blacklisted = sampledTotal.size - toTest.size
+
         // 第一阶段：TCP 预筛（并发）
-        val tested = tester.testAll(sampledTotal) { done, total ->
+        val tested = tester.testAll(toTest) { done, total ->
             onProgress(RefreshProgress(RefreshStage.TCP_TEST, done, total))
         }
         val tcpOk = tested.filter { it.status == ProxyStatus.AVAILABLE }
+        // TCP 不通 → 连败 +1；通过则留到 TG 阶段判定
+        for (item in tested) {
+            if (item.status != ProxyStatus.AVAILABLE) {
+                knownBad.recordFailure(item.host, item.port)
+            }
+        }
 
         // 第二阶段：TG 实测两关（仅 SOCKS5；MTProto 标记未验证）
         val verified = testTelegramEntries(tcpOk) { done, total ->
             onProgress(RefreshProgress(RefreshStage.TG_TEST, done, total))
         }
 
-        // TG 两关通过且延迟 ≤ 门槛才保留；不通或超门槛剔除（含超慢口径，保证四项之和=测试总数）
+        // TG 两关通过且延迟 ≤ 门槛才保留；两关失败与超门槛分开计数（空态可解释）
         val kept = mutableListOf<ProxyEntry>()
         var unverified = 0
         var tgFailed = 0
+        var overThreshold = 0
         for (item in verified) {
             when (item.tgVerdict) {
                 TgVerdict.UNVERIFIED -> unverified++
@@ -125,7 +139,7 @@ class ProxyRepository(
                     if (latency != null && latency <= tgLatencyLimitMs) {
                         kept.add(item)
                     } else {
-                        tgFailed++
+                        overThreshold++
                     }
                 }
             }
@@ -134,10 +148,21 @@ class ProxyRepository(
             available = kept.size,
             unverified = unverified,
             tgFailed = tgFailed,
+            overThreshold = overThreshold,
             dropped = tested.size - tcpOk.size,
             excluded = excludedCount + droppedCount,
+            blacklisted = blacklisted,
             tested = tested.size,
         )
+        // TG 结论沉淀连败计数：两关通过（含超门槛）清零，未过 +1；轮末一次落盘
+        for (item in verified) {
+            when (item.tgVerdict) {
+                TgVerdict.PASS -> knownBad.recordSuccess(item.host, item.port)
+                TgVerdict.FAIL -> knownBad.recordFailure(item.host, item.port)
+                TgVerdict.UNVERIFIED -> Unit
+            }
+        }
+        knownBad.persist()
         val result = RefreshResult.Success(kept, stats, nowText())
         // 沉淀本轮验证通过的节点（开关关闭时不写）；失败静默（下轮再试）
         knownGood.save(kept)

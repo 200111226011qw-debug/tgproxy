@@ -170,6 +170,10 @@
       <div class="stat-label">已排除</div>
       <div class="stat-value" id="stat-excluded">0</div>
     </div>
+    <div class="stat-card stat-orange" title="连续 3 轮不通的节点自动拉黑 48 小时，跳过测试节省筛选时间">
+      <div class="stat-label">连败拉黑（跳过测试）</div>
+      <div class="stat-value" id="stat-blacklisted">0</div>
+    </div>
   </section>
 
   <div class="error-banner" id="error-banner" hidden></div>
@@ -309,6 +313,7 @@
     $("stat-tg-failed").textContent = stats.tg_failed || 0;
     $("stat-dropped").textContent = stats.dropped || 0;
     $("stat-excluded").textContent = stats.excluded || 0;
+    $("stat-blacklisted").textContent = stats.blacklisted || 0;
   }
 
   function renderCountdown() {

@@ -84,12 +84,16 @@ class ProxyRepositoryTest {
             result as RefreshResult.Success
             val stats = result.stats
             assertEquals(1, stats.available)
-            assertEquals(1, stats.unverified) // MTProto
-            assertEquals(2, stats.tgFailed)   // .5 两关失败 + .6 超门槛
-            assertEquals(0, stats.dropped)    // TCP 全通过
-            assertEquals(4, stats.tested)     // SOCKS5 3 条 + MTProto 1 条
-            // 口径契约：available+unverified+tgFailed+dropped = tested
-            assertEquals(stats.tested, stats.available + stats.unverified + stats.tgFailed + stats.dropped)
+            assertEquals(1, stats.unverified)   // MTProto
+            assertEquals(1, stats.tgFailed)     // .5 两关失败
+            assertEquals(1, stats.overThreshold) // .6 过两关但超 1000ms 门槛
+            assertEquals(0, stats.dropped)      // TCP 全通过
+            assertEquals(4, stats.tested)       // SOCKS5 3 条 + MTProto 1 条
+            // 口径契约：available+unverified+tgFailed+overThreshold+dropped = tested
+            assertEquals(
+                stats.tested,
+                stats.available + stats.unverified + stats.tgFailed + stats.overThreshold + stats.dropped,
+            )
             // excluded = 非 Telegram 合法条目(1) + 非法行(1)
             assertEquals(2, stats.excluded)
             assertTrue(result.updatedAt.matches(Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$""")))
@@ -225,6 +229,149 @@ class ProxyRepositoryTest {
             repository.refresh("https://custom.example.com/list.txt")
 
             assertEquals(1, source.calls)
+        }
+    }
+
+    // ========================================================================
+    // 连续失败拉黑（v2.1.0）
+    // ========================================================================
+
+    /** 计数假测试器：记录送入 TCP 预筛的条数。 */
+    private class CountingTester : LatencyTester {
+        var fedCount = 0
+        override suspend fun testAll(
+            entries: List<ProxyEntry>,
+            onProgress: (Int, Int) -> Unit,
+        ): List<ProxyEntry> {
+            fedCount += entries.size
+            return entries.mapIndexed { index, entry ->
+                onProgress(index + 1, entries.size)
+                entry.copy(latencyMs = 50, status = ProxyStatus.AVAILABLE)
+            }
+        }
+    }
+
+    /** 恒失败闸门。 */
+    private class FailingGate : TelegramGateCaller {
+        var calls = 0
+        override fun test(host: String, port: Int): Int? {
+            calls++
+            return null
+        }
+    }
+
+    private fun badFile(name: String): File {
+        val dir = File.createTempFile(name, "").let {
+            it.delete()
+            it.mkdirs()
+            it
+        }
+        return File(dir, "known_bad.json")
+    }
+
+    @Test
+    fun `连续三轮 TG 失败后第四轮拉黑跳过测试`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val source = FakeSource().apply {
+                nextText = "socks5://1.2.3.4:1080\nsocks5://1.2.3.5:1080"
+            }
+            val tester = CountingTester()
+            val gate = FailingGate()
+            val bad = com.tgproxy.data.KnownBadStore(badFile("kb-3rounds"))
+            val repository = ProxyRepository(source, tester, gate, knownBad = bad, ioDispatcher = td)
+
+            repeat(3) { repository.refresh("https://example.com/proxy.txt") }
+            assertEquals(6, tester.fedCount) // 前三轮都全量测试
+            assertEquals(6, gate.calls)
+
+            val fourth = repository.refresh("https://example.com/proxy.txt")
+            assertTrue(fourth is RefreshResult.Success)
+            fourth as RefreshResult.Success
+            assertEquals(2, fourth.stats.blacklisted) // 两个节点都被拉黑
+            assertEquals(0, fourth.stats.tested)      // 没有节点参与测试
+            assertEquals(0, tester.fedCount - 6)      // TCP 预筛没再喂
+            assertEquals(0, gate.calls - 6)           // TG 也没再测
+        }
+    }
+
+    @Test
+    fun `中途通过会清零连败不拉黑`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+            val gate = FailingGate()
+            val bad = com.tgproxy.data.KnownBadStore(badFile("kb-reset"))
+            val repository = ProxyRepository(source, AllPassTester(), gate, knownBad = bad, ioDispatcher = td)
+
+            repository.refresh("https://example.com/proxy.txt") // 败 1
+            repository.refresh("https://example.com/proxy.txt") // 败 2
+            // 第三轮换通过闸门：连败清零
+            val passRepo = ProxyRepository(source, AllPassTester(), SelectiveGate(), knownBad = bad, ioDispatcher = td)
+            val third = passRepo.refresh("https://example.com/proxy.txt")
+            assertTrue(third is RefreshResult.Success)
+            third as RefreshResult.Success
+            assertEquals(1, third.stats.available)
+            // 第四轮再败：连败从 0 重新计
+            repository.refresh("https://example.com/proxy.txt")
+            val fifth = repository.refresh("https://example.com/proxy.txt")
+            assertTrue(fifth is RefreshResult.Success)
+            fifth as RefreshResult.Success
+            assertEquals(0, fifth.stats.blacklisted)
+            assertEquals(1, fifth.stats.tgFailed)
+        }
+    }
+
+    @Test
+    fun `超门槛节点按通过清零连败`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+            val failGate = FailingGate()
+            val bad = com.tgproxy.data.KnownBadStore(badFile("kb-over"))
+            // 两轮失败
+            val failRepo = ProxyRepository(source, AllPassTester(), failGate, knownBad = bad, ioDispatcher = td)
+            failRepo.refresh("https://example.com/proxy.txt")
+            failRepo.refresh("https://example.com/proxy.txt")
+            // 第三轮：过两关但 1500ms 超门槛（节点活着只是慢）→ 应清零
+            val slowGate = TelegramGateCaller { _, _ -> 1_500 }
+            val slowRepo = ProxyRepository(source, AllPassTester(), slowGate, knownBad = bad, ioDispatcher = td)
+            slowRepo.refresh("https://example.com/proxy.txt")
+            // 第四轮再失败：连败为 1，不拉黑
+            val fourth = failRepo.refresh("https://example.com/proxy.txt")
+            assertTrue(fourth is RefreshResult.Success)
+            fourth as RefreshResult.Success
+            assertEquals(0, fourth.stats.blacklisted)
+            assertEquals(1, fourth.stats.tgFailed)
+            assertEquals(1, fourth.stats.tested)
+        }
+    }
+
+    @Test
+    fun `拉黑 48 小时后自动解封重测`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            var now = 1_000_000L
+            val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+            val tester = CountingTester()
+            val gate = FailingGate()
+            val bad = com.tgproxy.data.KnownBadStore(badFile("kb-expiry")) { now }
+            val repository = ProxyRepository(source, tester, gate, knownBad = bad, ioDispatcher = td)
+
+            repeat(3) { repository.refresh("https://example.com/proxy.txt") }
+            val blacklistedRound = repository.refresh("https://example.com/proxy.txt")
+            assertTrue(blacklistedRound is RefreshResult.Success)
+            blacklistedRound as RefreshResult.Success
+            assertEquals(1, blacklistedRound.stats.blacklisted)
+
+            // 推进 49 小时：过保质期 → 回到测试池
+            now += 49 * 3_600_000L
+            val revived = repository.refresh("https://example.com/proxy.txt")
+            assertTrue(revived is RefreshResult.Success)
+            revived as RefreshResult.Success
+            assertEquals(0, revived.stats.blacklisted)
+            assertEquals(1, revived.stats.tested)
+            assertEquals(1, revived.stats.tgFailed)
         }
     }
 

@@ -1,20 +1,31 @@
 package com.tgproxy.ui
 
 import android.content.ActivityNotFoundException
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,23 +33,25 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.tgproxy.Constants
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ThemeMode
-import com.tgproxy.ui.components.ControlBar
+import com.tgproxy.model.TgVerdict
+import com.tgproxy.ui.components.EmptyStateCard
 import com.tgproxy.ui.components.ErrorBanner
-import com.tgproxy.ui.components.ProgressCard
-import com.tgproxy.ui.components.ProxyListSection
-import com.tgproxy.ui.components.StatChips
+import com.tgproxy.ui.components.HeroStatusCard
+import com.tgproxy.ui.components.ProxyActionDialog
+import com.tgproxy.ui.components.ProxyRowCard
+import com.tgproxy.ui.components.SettingsSheetContent
+import com.tgproxy.ui.components.StatsCard
+import com.tgproxy.ui.components.formatCountdown
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -46,12 +59,13 @@ import kotlinx.coroutines.launch
 private data class CopyFlash(val link: String, val id: Long)
 
 /**
- * 主屏幕（v2.0 重做，单屏 Scaffold）。
+ * 主屏幕（v2.1.0 列表优先布局，参考 v2rayNG 的「顶栏 + 卡片列表 + FAB」心智模型）：
  *
- * 自上而下：头部（应用名 + 副标题/更新时间 + 主题切换）→ 刷新进度卡（刷新中）→
- * 统计胶囊条 → 错误条 → 控制卡（刷新/间隔/known_good）→ 代理列表（下拉刷新，weight 1f）→
- * 页脚（数据源 + 门槛说明）。
+ * 首屏 = 节点列表（下拉刷新）；精简顶栏（标题 + 更新时间/倒计时 + 设置入口）；
+ * 刷新按钮为右下角 FAB（刷新中转圈）；状态条/错误条/空态作为列表首项随内容滚动；
+ * 设置（间隔 / known_good / 主题 / 数据源说明）收进底部弹层。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -65,6 +79,8 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         mutableStateOf(settings.intervalMinutes.toString())
     }
     var copyFlash by remember { mutableStateOf<CopyFlash?>(null) }
+    var showSettings by remember { mutableStateOf(false) }
+    var menuEntry by remember { mutableStateOf<ProxyEntry?>(null) }
 
     // 复制图标态 1.5s 后自动清除（等价桌面版 1500ms）
     LaunchedEffect(copyFlash) {
@@ -83,8 +99,8 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         }
     }
 
-    // 行点击：唤起 Telegram 直接弹出「添加代理」窗口（不经过网页；未安装则降级复制）
-    val onRowClick: (ProxyEntry) -> Unit = { entry ->
+    // 使用节点：唤起 Telegram 直接弹出「添加代理」窗口（不经过网页；未安装则降级复制）
+    val onUse: (ProxyEntry) -> Unit = { entry ->
         try {
             context.startActivity(buildTelegramViewIntent(toTelegramProxyUrl(entry)))
         } catch (e: ActivityNotFoundException) {
@@ -105,6 +121,62 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
         snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(
+                            text = "TG 代理",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Text(
+                            text = if (uiState.fetching) {
+                                "正在刷新…"
+                            } else {
+                                "更新 ${uiState.updatedAt ?: "--"} · ${formatCountdown(uiState.countdownSec)} 后自动更新"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(
+                            imageVector = Icons.Filled.Settings,
+                            contentDescription = "设置",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { viewModel.refresh() },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            ) {
+                if (uiState.fetching) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.padding(14.dp),
+                        strokeWidth = 2.5.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "刷新",
+                        modifier = Modifier.padding(14.dp),
+                    )
+                }
+            }
+        },
     ) { innerPadding ->
         Surface(
             modifier = Modifier
@@ -112,115 +184,102 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 .padding(innerPadding),
             color = MaterialTheme.colorScheme.background,
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                // 头部：应用名 + 副标题 + 更新时间 + 主题切换
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 8.dp, top = 14.dp),
-                    verticalAlignment = Alignment.Top,
+            PullToRefreshBox(
+                isRefreshing = uiState.fetching,
+                onRefresh = { viewModel.refresh() },
+            ) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "TG Proxy",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            text = "TG 实测双闸 · 仅保留延迟 ≤${Constants.TG_LATENCY_LIMIT_MS}ms 节点",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = "更新时间：${uiState.updatedAt ?: "--"}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    // 仪表盘 Hero 大卡 + 四段统计卡（刷新中 = 阶段进度；空闲 = 大数字 + 摘要）
+                    item {
+                        val bestLatencyMs = uiState.proxies
+                            .filter { it.tgVerdict == TgVerdict.PASS && it.latencyMs != null }
+                            .minOfOrNull { it.latencyMs!! }
+                        HeroStatusCard(
+                            fetching = uiState.fetching,
+                            progress = uiState.progress,
+                            lastDurationMs = uiState.lastDurationMs,
+                            stats = uiState.stats,
+                            bestLatencyMs = bestLatencyMs,
+                            countdownSec = uiState.countdownSec,
+                            countdownStarted = uiState.countdownStarted,
+                            modifier = Modifier.padding(top = 4.dp),
                         )
                     }
-                    TextButton(
-                        onClick = {
-                            viewModel.setThemeMode(nextThemeMode(settings.themeMode))
-                        },
-                    ) {
+                    item {
+                        StatsCard(stats = uiState.stats)
+                    }
+
+                    // 错误提示条（条件显示）
+                    val error = uiState.error
+                    if (error != null) {
+                        item {
+                            ErrorBanner(message = error)
+                        }
+                    }
+
+                    if (uiState.proxies.isEmpty()) {
+                        item {
+                            EmptyStateCard(
+                                stats = uiState.stats,
+                                fetching = uiState.fetching,
+                            )
+                        }
+                    } else {
+                        items(
+                            items = uiState.proxies,
+                            key = { it.link },
+                            contentType = { it.type },
+                        ) { entry ->
+                            ProxyRowCard(
+                                entry = entry,
+                                copied = copyFlash?.link == entry.link,
+                                onUse = { onUse(entry) },
+                                onLongClick = { menuEntry = entry },
+                                onCopy = { copyLink(entry, true) },
+                                onShare = { onShare(entry) },
+                            )
+                        }
+                    }
+
+                    // 页脚
+                    item {
                         Text(
-                            text = themeModeLabel(settings.themeMode),
+                            text = "TG 两关实测 · 仅保留 ≤${Constants.TG_LATENCY_LIMIT_MS}ms · 点「使用」一键连 Telegram",
                             style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp, bottom = 88.dp),
                         )
                     }
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // 刷新进度卡（刷新中显示阶段 + done/total）
-                val progress = uiState.progress
-                if (progress != null) {
-                    ProgressCard(
-                        progress = progress,
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-
-                // 统计胶囊条
-                StatChips(
-                    stats = uiState.stats,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-
-                // 错误提示条（条件显示）
-                val error = uiState.error
-                if (error != null) {
-                    ErrorBanner(
-                        message = error,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                    )
-                } else {
-                    Spacer(modifier = Modifier.height(10.dp))
-                }
-
-                // 控制卡
-                ControlBar(
-                    fetching = uiState.fetching,
-                    intervalText = intervalText,
-                    onIntervalTextChange = { intervalText = it },
-                    onRefresh = { viewModel.refresh() },
-                    onSaveInterval = { viewModel.saveIntervalInput(intervalText) },
-                    knownGoodEnabled = settings.knownGoodEnabled,
-                    onKnownGoodChange = { viewModel.setKnownGoodEnabled(it) },
-                    settingsMessage = uiState.settingsMessage,
-                    settingsMessageIsError = uiState.settingsMessageIsError,
-                    countdownSec = uiState.countdownSec,
-                    countdownStarted = uiState.countdownStarted,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // 代理列表区（剩余空间 + 下拉刷新）
-                ProxyListSection(
-                    proxies = uiState.proxies,
-                    fetching = uiState.fetching,
-                    copiedLink = copyFlash?.link,
-                    onRefresh = { viewModel.refresh() },
-                    onRowClick = onRowClick,
-                    onCopy = { entry -> copyLink(entry, true) },
-                    onShare = onShare,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
-                )
-
-                // 页脚：数据来源
-                Text(
-                    text = "数据源：内置 ${Constants.DEFAULT_PROXY_LIST_URLS.size} 个（直连失败自动走 jsDelivr 镜像）；自定义：${settings.proxyListUrl}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 6.dp, bottom = 8.dp),
-                )
             }
+        }
+    }
+
+    // 长按菜单
+    ProxyActionDialog(
+        entry = menuEntry,
+        onDismiss = { menuEntry = null },
+        onCopy = { copyLink(it, true) },
+        onShare = onShare,
+    )
+
+    // 设置底部弹层
+    if (showSettings) {
+        ModalBottomSheet(onDismissRequest = { showSettings = false }) {
+            SettingsSheetContent(
+                settings = settings,
+                intervalText = intervalText,
+                onIntervalTextChange = { intervalText = it },
+                onSaveInterval = { viewModel.saveIntervalInput(intervalText) },
+                onKnownGoodChange = { viewModel.setKnownGoodEnabled(it) },
+                onThemeModeClick = { viewModel.setThemeMode(nextThemeMode(settings.themeMode)) },
+                settingsMessage = uiState.settingsMessage,
+                settingsMessageIsError = uiState.settingsMessageIsError,
+            )
         }
     }
 }
@@ -230,11 +289,4 @@ internal fun nextThemeMode(mode: ThemeMode): ThemeMode = when (mode) {
     ThemeMode.SYSTEM -> ThemeMode.LIGHT
     ThemeMode.LIGHT -> ThemeMode.DARK
     ThemeMode.DARK -> ThemeMode.SYSTEM
-}
-
-/** 主题切换按钮文案。 */
-internal fun themeModeLabel(mode: ThemeMode): String = when (mode) {
-    ThemeMode.SYSTEM -> "主题：自动"
-    ThemeMode.LIGHT -> "主题：浅色"
-    ThemeMode.DARK -> "主题：深色"
 }

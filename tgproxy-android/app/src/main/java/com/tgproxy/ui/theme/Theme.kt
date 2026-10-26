@@ -29,24 +29,24 @@ private val LightColors = lightColorScheme(
     onErrorContainer = OnErrorContainerLight,
 )
 
-/** 深色主题：Telegram 深色聊天配色（v2.0 界面重做）。 */
+/** 深色主题：v2.1 仪表盘视觉（深藏青底 + 青色强调，参考深色数据仪表盘）。 */
 private val DarkColors = darkColorScheme(
-    primary = TgBlue,
-    onPrimary = SurfaceWhite,
+    primary = AccentCyan,
+    onPrimary = NavyBackground,
     primaryContainer = TgBlueDeep,
     onPrimaryContainer = SurfaceWhite,
     secondary = SuccessGreen,
-    onSecondary = DarkBackground,
-    background = TgDarkBackground,
+    onSecondary = NavyBackground,
+    background = NavyBackground,
     onBackground = TgDarkTextPrimary,
-    surface = TgDarkSurface,
+    surface = NavySurface,
     onSurface = TgDarkTextPrimary,
-    surfaceVariant = TgDarkSurfaceHigh,
-    onSurfaceVariant = TgDarkTextSecondary,
-    outline = TgDarkOutline,
-    outlineVariant = TgDarkOutline,
+    surfaceVariant = NavySurfaceHigh,
+    onSurfaceVariant = NavyTextSecondary,
+    outline = NavyOutline,
+    outlineVariant = NavyOutline,
     error = DarkError,
-    onError = DarkBackground,
+    onError = NavyBackground,
     errorContainer = DarkErrorContainer,
     onErrorContainer = DarkOnErrorContainer,
 )

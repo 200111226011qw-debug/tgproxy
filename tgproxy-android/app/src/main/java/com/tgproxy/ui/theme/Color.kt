@@ -131,3 +131,28 @@ val TgDarkTextPrimary = Color(0xFFEAF0F4)
 
 /** 深色下次要文本（#7D8E9E）。 */
 val TgDarkTextSecondary = Color(0xFF7D8E9E)
+
+// ============================================================================
+// v2.1 仪表盘视觉（参考深色数据仪表盘风格：深藏青底 + 蓝→青渐变 + 霓虹点缀）
+// ============================================================================
+
+/** 页面深藏青底（参考 #0D1526）。 */
+val NavyBackground = Color(0xFF0D1526)
+
+/** 卡片深藏青面（比背景亮一级）。 */
+val NavySurface = Color(0xFF141F36)
+
+/** 次级面板/输入底（再亮一级）。 */
+val NavySurfaceHigh = Color(0xFF1C2A47)
+
+/** 深藏青系描边/分隔。 */
+val NavyOutline = Color(0xFF27365C)
+
+/** 仪表盘强调青（渐变端点/选中态 #00E5D0）。 */
+val AccentCyan = Color(0xFF00E5D0)
+
+/** 仪表盘强调粉（超门槛等警示高亮 #FF4D8D）。 */
+val AccentPink = Color(0xFFFF4D8D)
+
+/** 仪表盘次级文本（灰蓝 #8A94A6）。 */
+val NavyTextSecondary = Color(0xFF8A94A6)

@@ -21,6 +21,21 @@
 >
 > 以下 v1.x 快照中与此冲突的条款（C6 的 20 并发、F13 的延迟三档、Stats 四项、`StatsGrid`、`TEST_MAX_CONCURRENCY=20` 等）均已废止。
 
+> ## ⚠️ v2.1.0 变更记录（2026-10-26，叠加于 v2.0.0 之上）
+>
+> 1. **布局重构（列表优先）**：首屏 = 节点列表（LazyColumn + 下拉刷新）；状态条（进度/上轮摘要+耗时+倒计时）、错误条、空态卡作为列表首项；顶栏精简为 标题 + 更新时间/倒计时 + 设置齿轮；刷新按钮改右下角 FAB；设置（间隔/known_good/外观/数据源说明）收进 ModalBottomSheet。移除组件 `ControlBar` / `ProgressCard` / `StatChips`，新增 `StatusStrip` / `SettingsSheet` / `EmptyStateCard`，`ProxyList` 改为 `ProxyRowCard`（左 4dp 延迟色条 + 「使用」主按钮 64×48dp + 复制 40dp + 长按菜单）。
+> 2. **统计口径拆分**：`Stats` 五项→六项，新增 `overThreshold`（TG 两关通过但 >1000ms）；契约 available+unverified+tgFailed+overThreshold+dropped=tested；桌面版 tg_failed = tgFailed+overThreshold（含超慢口径不变）。
+> 3. **空态透明化**：0 节点时展示本轮全链路统计（测试/TCP 通过/TG 两关通过/超门槛）与原因说明（宁缺毋滥，超门槛不展示）。
+> 4. **耗时摘要**：`ProxyUiState.lastDurationMs`（MainViewModel 以 timeSource 计时），空闲状态条显示「上轮测试 N，保留 X，耗时 Y」。
+> 5. **应用图标**：自适应图标重画（#17212B 底 + #2AABEE 纸飞机 + 白速度线；API 24-25 矢量回退同步）。
+> 6. **版本**：versionCode 11 / versionName 2.1.0；测试仍 10 类 74 例 × 双变体 = 148 全绿。
+
+> ## ⚠️ v2.1.0 二次变更（2026-10-27，参考图风格化 + 连败拉黑，叠加于上方 v2.1.0 之上）
+>
+> 1. **仪表盘视觉（参考用户提供的两张参考图：蓝青渐变大卡 + 深色数据仪表盘）**：深色主题色板整体换为深藏青系（background #0D1526 / surface #141F36 / surfaceVariant #1C2A47 / outline #27365C / 次要文本 #8A94A6），强调色改青色 #00E5D0（primary）；新增 `HeroStatusCard`（蓝→青渐变大卡：空闲 = 「可用节点」44sp 大数字 + 最优延迟/上轮耗时 + 下次更新倒计时；刷新中 = 阶段名 + done/total + 白色进度条）与 `StatsCard`（五段统计：TG 未过/超门槛/TCP 不通/已拉黑/已排除）；`StatusStrip` 废止删除（formatCountdown/formatDuration 迁入 `HeroStatusCard.kt`）；`ProxyRowCard` 的「使用」按钮改 TG 蓝→青渐变填充、复制改圆底（surfaceVariant 圆形 40dp）、卡片去描边大圆角 16dp；标题改中文「TG 代理」。
+> 2. **连败拉黑（对齐桌面 v1.9.0）**：新增纯 Kotlin `KnownBadStore`（应用私有目录 known_bad.json；`KNOWN_BAD_STREAK_LIMIT=3` / `KNOWN_BAD_EXPIRY_MS=48h` / `KNOWN_BAD_MAX_ENTRIES=10000`，时钟注入可测；记录只在内存累加、轮末统一 persist）。管线接入：抽样后过滤 `isBlacklisted` 节点（不进 TCP 预筛）→ TCP 不通或 TG FAIL 连败 +1 → TG PASS（含超门槛）清零 → 轮末落盘。`Stats` 新增 `blacklisted`（独立于 tested 口径）；设置弹层数据源说明补充拉黑规则；空态卡补充「连续失败拉黑跳过 N 个」行。
+> 3. **测试**：新增 `KnownBadStoreTest`（7 例）+ `ProxyRepositoryTest` 连败四场景（4 例）；11 类 85 例 × 双变体 = 170 全绿。
+
 ---
 
 ## 1. 实现方案与框架选型

@@ -508,6 +508,7 @@ def main():
         config["max_tg_latency_ms"],
         known_good_path=os.path.join(BASE_DIR, "known_good.json"),
         source_health_path=os.path.join(BASE_DIR, "source_health.json"),
+        known_bad_path=os.path.join(BASE_DIR, "known_bad.json"),
         on_sources_changed=persist_active_urls,
         known_good_enabled=config["known_good_enabled"],
     )
