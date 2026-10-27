@@ -149,6 +149,15 @@ def test_defaults_unchanged_without_env():
     assert out.stdout.split() == ["15", "2.0", "8.0", "20.0"]
 
 
+def test_tcp_workers_default_and_env_override():
+    """TCP 并发默认 300，可用 TGPROXY_TCP_WORKERS 覆盖（便于限流时回退）。"""
+    code = "import proxy_manager as m; print(m.TEST_MAX_WORKERS)"
+    assert _run_with_env(code, {}).stdout.strip() == "300"
+    assert _run_with_env(code, {"TGPROXY_TCP_WORKERS": "200"}).stdout.strip() == "200"
+    # 非法值回落默认，不能让一个笔误把并发变成 0 或负数
+    assert _run_with_env(code, {"TGPROXY_TCP_WORKERS": "abc"}).stdout.strip() == "300"
+
+
 # --------------------------------------------------------------------------
 # 3. 预筛超时从延迟门槛派生（方案 B）
 # --------------------------------------------------------------------------

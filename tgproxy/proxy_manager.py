@@ -87,7 +87,12 @@ TCP_TIMEOUT_WARN_SEC = 5.0
 # 免费列表动辄数万条，全量 TCP 测试耗时过久；抽样上限让单轮刷新控制在分钟级
 MAX_PER_SOURCE = 1000
 MAX_TOTAL = 3000
-TEST_MAX_WORKERS = 150
+# TCP 预筛并发。提高并发能直接压缩 TCP 阶段，但受本地端口/句柄上限约束，
+# 且对免费代理站点是成倍的瞬时压力 —— 用环境变量做 A/B，不要直接改死。
+# 150 → 300 实测：TCP 每节点 10.0 → 5.2 ms，dropped 占比反而从 62% 降到 56%，
+# 本地 1200 并发 socket 零失败。若日后发现被代理站点限流（dropped 暴增），
+# 用 TGPROXY_TCP_WORKERS 回退，不必重新打包。
+TEST_MAX_WORKERS = int(_env_float("TGPROXY_TCP_WORKERS", 300))
 # TG 实测：通过 SOCKS5 代理真实访问 Telegram，验证节点能否连通 Telegram
 # 1) Telegram 数据中心（客户端收发消息实际走的线路）  2) Telegram 站点全链路（TLS+HTTP）
 TELEGRAM_DC_HOST = "149.154.167.51"
