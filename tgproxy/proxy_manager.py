@@ -52,9 +52,33 @@ DEFAULT_PROXY_LIST_URLS = [
     "https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt",
 ]
 USER_AGENT = "tgproxy/1.0 (local Telegram proxy manager)"
-FETCH_TIMEOUT_SEC = 15
+
+
+def _env_float(name, default):
+    """读取数值型环境变量做实验性覆盖；非法值回落默认并告警。
+
+    P1-A 的超时 A/B 需要在不重建 exe 的前提下改数值。默认值仍是模块常量，
+    环境变量只是「实验覆盖」，不影响正常启动路径。
+    """
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        logger.warning("环境变量 %s=%r 不是数字，忽略，用默认 %s", name, raw, default)
+        return default
+    if value <= 0:
+        logger.warning("环境变量 %s=%r 必须为正数，忽略，用默认 %s", name, raw, default)
+        return default
+    return value
+
+
+# 超时值支持环境变量覆盖（实验用，见 _env_float）：
+#   TGPROXY_FETCH_TIMEOUT / TGPROXY_TCP_TIMEOUT / TGPROXY_TG_TIMEOUT / TGPROXY_TG_DEADLINE
+FETCH_TIMEOUT_SEC = _env_float("TGPROXY_FETCH_TIMEOUT", 15)
 FETCH_MAX_SOURCES = 20  # 与 app.py 的 MAX_PROXY_LIST_URLS 对齐，用户配的源全部参与抓取与体检
-TEST_TIMEOUT_SEC = 5.0
+TEST_TIMEOUT_SEC = _env_float("TGPROXY_TCP_TIMEOUT", 5.0)
 # 免费列表动辄数万条，全量 TCP 测试耗时过久；抽样上限让单轮刷新控制在分钟级
 MAX_PER_SOURCE = 1000
 MAX_TOTAL = 3000
@@ -65,10 +89,10 @@ TELEGRAM_DC_HOST = "149.154.167.51"
 TELEGRAM_DC_PORT = 443
 TELEGRAM_TEST_HOST = "desktop.telegram.org"
 TELEGRAM_TEST_PORT = 443
-TG_TEST_TIMEOUT_SEC = 8.0
+TG_TEST_TIMEOUT_SEC = _env_float("TGPROXY_TG_TIMEOUT", 8.0)
 TG_TEST_MAX_WORKERS = 100
 # 单节点 TG 实测总预算（秒）：两关串行共享，防个别节点拖垮整轮
-TG_TEST_DEADLINE_SEC = 20.0
+TG_TEST_DEADLINE_SEC = _env_float("TGPROXY_TG_DEADLINE", 20.0)
 # 候选源池：活跃源「变垃圾」被停用后按顺序自动补位（含爬虫源，由 crawl_extract 处理）
 SOURCE_CANDIDATES = [
     "https://proxyspace.pro/socks5.txt",
@@ -384,11 +408,13 @@ def _http_get(url, timeout):
         return response.read().decode("utf-8", errors="replace")
 
 
-def fetch_proxy_text(url, timeout=FETCH_TIMEOUT_SEC):
+def fetch_proxy_text(url, timeout=None):
     """抓取代理列表文本；直连失败时自动回退 jsDelivr 镜像。
 
     返回 (text, via_mirror)。
     """
+    if timeout is None:
+        timeout = FETCH_TIMEOUT_SEC
     last_error = None
     for candidate in [url] + mirror_urls(url):
         try:
@@ -398,8 +424,10 @@ def fetch_proxy_text(url, timeout=FETCH_TIMEOUT_SEC):
     raise last_error
 
 
-def test_tcp_latency(host, port, timeout=TEST_TIMEOUT_SEC):
+def test_tcp_latency(host, port, timeout=None):
     """TCP 连接测试，返回耗时毫秒；超时/拒绝/错误返回 None。"""
+    if timeout is None:
+        timeout = TEST_TIMEOUT_SEC
     started = time.perf_counter()
     try:
         connection = socket.create_connection((host, port), timeout=timeout)
@@ -462,12 +490,14 @@ def _socks5_connect(sock, target_host, target_port, deadline):
         raise OSError("socks5 bad atyp %d" % atyp)
 
 
-def test_socks5_telegram_dc(host, port, timeout=TG_TEST_TIMEOUT_SEC,
+def test_socks5_telegram_dc(host, port, timeout=None,
                             dc_host=TELEGRAM_DC_HOST, dc_port=TELEGRAM_DC_PORT):
     """经代理 CONNECT Telegram 数据中心 IP，返回往返毫秒；不通返回 None。
 
     timeout 为本关总预算（秒）：连接、握手、CONNECT 共享同一个 deadline。
     """
+    if timeout is None:
+        timeout = TG_TEST_TIMEOUT_SEC
     started = time.perf_counter()
     deadline = started + timeout
     try:
@@ -486,7 +516,7 @@ def test_socks5_telegram_dc(host, port, timeout=TG_TEST_TIMEOUT_SEC,
             pass
 
 
-def test_telegram_web_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
+def test_telegram_web_via_socks5(host, port, timeout=None,
                                  target_host=TELEGRAM_TEST_HOST,
                                  target_port=TELEGRAM_TEST_PORT):
     """TG 实测第二关：经代理全链路访问 Telegram 站点，返回往返毫秒；不通返回 None。
@@ -494,6 +524,8 @@ def test_telegram_web_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
     流程：代理 -> desktop.telegram.org（CONNECT + TLS 证书校验 + HTTP 状态行，
     验证全链路可用、无劫持）。
     """
+    if timeout is None:
+        timeout = TG_TEST_TIMEOUT_SEC
     started = time.perf_counter()
     deadline = started + timeout
     try:
@@ -535,13 +567,16 @@ def test_telegram_web_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
             pass
 
 
-def test_telegram_via_socks5(host, port, timeout=TG_TEST_TIMEOUT_SEC,
-                             deadline=TG_TEST_DEADLINE_SEC):
+def test_telegram_via_socks5(host, port, timeout=None, deadline=None):
     """TG 实测（管线入口，两关串行）：先经代理 CONNECT Telegram 数据中心
     （客户端实际线路，其往返毫秒作为延迟），通过后再全链路访问
     desktop.telegram.org 验证可用且无劫持；任一关失败返回 None。
     两关共享单节点总预算 deadline（秒），防个别节点拖垮整轮。
     """
+    if timeout is None:
+        timeout = TG_TEST_TIMEOUT_SEC
+    if deadline is None:
+        deadline = TG_TEST_DEADLINE_SEC
     stage = max(1.0, min(timeout, deadline))
     started = time.perf_counter()
     dc_ms = test_socks5_telegram_dc(host, port, stage)
