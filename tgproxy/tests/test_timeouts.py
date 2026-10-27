@@ -94,25 +94,17 @@ def test_explicit_timeout_overrides_constant():
     assert records == [0.25]
 
 
-def test_tg_pipeline_reads_timeout_and_deadline_at_call_time():
-    """两关管线共享的 stage 预算也必须随常量变化。"""
+def test_tg_dc_budget_derives_from_latency_limit():
+    """第一关预算随门槛派生，而不是沿用固定常量。"""
     calls = []
-    orig_dc = pm.test_socks5_telegram_dc
-    orig_to = pm.TG_TEST_TIMEOUT_SEC
-    orig_dl = pm.TG_TEST_DEADLINE_SEC
+    orig = pm.test_socks5_telegram_dc
     pm.test_socks5_telegram_dc = lambda h, p, t=None, **k: calls.append(t) or None
     try:
-        pm.TG_TEST_TIMEOUT_SEC = 3.0
-        pm.TG_TEST_DEADLINE_SEC = 3.0
-        pm.test_telegram_via_socks5("1.2.3.4", 1080)
-        pm.TG_TEST_TIMEOUT_SEC = 6.0
-        pm.TG_TEST_DEADLINE_SEC = 6.0
-        pm.test_telegram_via_socks5("1.2.3.4", 1080)
+        pm.test_telegram_via_socks5("1.2.3.4", 1080, max_latency_ms=1000)
+        pm.test_telegram_via_socks5("1.2.3.4", 1080, max_latency_ms=5000)
     finally:
-        pm.test_socks5_telegram_dc = orig_dc
-        pm.TG_TEST_TIMEOUT_SEC = orig_to
-        pm.TG_TEST_DEADLINE_SEC = orig_dl
-    assert calls == [3.0, 6.0], "stage 预算没跟着常量变：%r" % (calls,)
+        pm.test_socks5_telegram_dc = orig
+    assert calls == [2.0, 6.0], "第一关预算没跟着门槛变：%r" % (calls,)
 
 
 # --------------------------------------------------------------------------

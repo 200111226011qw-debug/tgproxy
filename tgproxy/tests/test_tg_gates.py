@@ -130,6 +130,34 @@ def test_no_prune_when_max_latency_absent():
     assert value == 5000
 
 
+def test_dc_and_web_budgets_are_independent():
+    """第一关预算随门槛派生，第二关预算固定 —— 两者不能共用一个值。"""
+    dc_calls, web_calls = [], []
+
+    def fake_dc(h, p, t=None, **k):
+        dc_calls.append(t)
+        return 700
+
+    def fake_web(h, p, t=None, **k):
+        web_calls.append(t)
+        return 300
+
+    with _PatchedGates(fake_dc, fake_web):
+        pm.test_telegram_via_socks5("1.1.1.1", 1080, max_latency_ms=1000)
+        pm.test_telegram_via_socks5("1.1.1.1", 1080, max_latency_ms=5000)
+
+    assert dc_calls == [2.0, 6.0], "第一关预算没随门槛变：%r" % (dc_calls,)
+    # 第二关实测 web_p50 就有 2~3s，绝不能跟着门槛缩到 2s
+    assert web_calls == [8.0, 8.0], "第二关预算不该受门槛影响：%r" % (web_calls,)
+
+
+def test_deadline_expands_for_high_threshold():
+    """高门槛下 deadline 必须跟着两关预算扩展，否则第一关永远跑不完。"""
+    assert pm.tg_deadline_for(2.0, 8.0) == 20.0     # 下限
+    assert pm.tg_deadline_for(61.0, 8.0) == 71.0    # 门槛 60s 时
+    assert pm.tg_deadline_for(6.0, 8.0) == 20.0     # 6+8+2=16 < 20
+
+
 def test_manager_marks_pruned_node_as_over_threshold_not_failed():
     """剪枝节点必须 tg_ok=True（不误增连败）、tg_latency=dc_ms（不被 kept）。"""
     manager = pm.ProxyManager(max_tg_latency_ms=1000)

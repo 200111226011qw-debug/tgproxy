@@ -94,9 +94,15 @@ TELEGRAM_DC_HOST = "149.154.167.51"
 TELEGRAM_DC_PORT = 443
 TELEGRAM_TEST_HOST = "desktop.telegram.org"
 TELEGRAM_TEST_PORT = 443
+# 第二关（TLS + HTTP 访问 desktop.telegram.org）的单节点预算。
+# 与延迟门槛无关：实测 web_p50 约 2~3s、p90 到 8s，成本由 TLS/HTTP 决定。
 TG_TEST_TIMEOUT_SEC = _env_float("TGPROXY_TG_TIMEOUT", 8.0)
+# 第一关（CONNECT Telegram DC）预算从延迟门槛派生，见 tg_dc_timeout_for
+TG_DC_TIMEOUT_BASE_SEC = _env_float("TGPROXY_TG_DC_TIMEOUT", 2.0)
+TG_DC_TIMEOUT_MARGIN_SEC = 1.0
 TG_TEST_MAX_WORKERS = 100
-# 单节点 TG 实测总预算（秒）：两关串行共享，防个别节点拖垮整轮
+# 单节点 TG 实测总预算（秒）的**下限**；实际值按两关预算动态扩展。
+# 固定 20s 在高门槛下会与 dc 预算冲突（门槛 60s → dc 61s，还没测完就被砍）。
 TG_TEST_DEADLINE_SEC = _env_float("TGPROXY_TG_DEADLINE", 20.0)
 # 候选源池：活跃源「变垃圾」被停用后按顺序自动补位（含爬虫源，由 crawl_extract 处理）
 SOURCE_CANDIDATES = [
@@ -596,12 +602,48 @@ def test_telegram_web_via_socks5(host, port, timeout=None,
             pass
 
 
-def test_telegram_via_socks5(host, port, timeout=None, deadline=None, sink=None,
-                             max_latency_ms=None):
+def tg_dc_timeout_for(max_tg_latency_ms):
+    """第一关（CONNECT Telegram DC）的单节点预算，从延迟门槛派生。
+
+    与 `tcp_timeout_for` 同构：`test_socks5_telegram_dc` 的返回值 dc_ms **就是**
+    最终的 `tg_latency`，门槛比较的就是它。所以第一关预算必须 ≥ 门槛 + 余量，
+    否则「能过门槛」的节点会在第一关被提前砍掉。
+
+    实测依据：默认门槛 1000ms 下，通过两关的节点 dc_p50 ≈ 741ms，2.0s 足够；
+    而 dc_fail 组全部顶在超时上限，8.0s 是纯浪费。
+
+    第二关（TLS+HTTP）**不能**跟着这个值走——实测 web_p50 就有 2~3s，
+    用 2s 会砍掉一半以上。两关预算必须分开。
+    """
+    try:
+        limit = float(max_tg_latency_ms)
+    except (TypeError, ValueError):
+        limit = float(TG_LATENCY_LIMIT_MS)
+    if limit <= 0:
+        limit = float(TG_LATENCY_LIMIT_MS)
+    derived = limit / 1000.0 + TG_DC_TIMEOUT_MARGIN_SEC
+    return max(TG_DC_TIMEOUT_BASE_SEC, derived)
+
+
+def tg_deadline_for(dc_timeout, web_timeout):
+    """单节点总预算：必须 ≥ 两关之和，否则高门槛用户还没测完就被 deadline 砍掉。
+
+    门槛 60s 时 dc 预算 61s，若 deadline 固定 20s，第一关永远跑不完 ——
+    节点会被误判为 deadline 超时。所以 deadline 要跟着两关预算扩展。
+    """
+    return max(TG_TEST_DEADLINE_SEC, dc_timeout + web_timeout + 2.0)
+
+
+def test_telegram_via_socks5(host, port, dc_timeout=None, web_timeout=None,
+                             deadline=None, sink=None, max_latency_ms=None):
     """TG 实测（管线入口，两关串行）：先经代理 CONNECT Telegram 数据中心
     （客户端实际线路，其往返毫秒作为延迟），通过后再全链路访问
     desktop.telegram.org 验证可用且无劫持；任一关失败返回 None。
-    两关共享单节点总预算 deadline（秒），防个别节点拖垮整轮。
+
+    **两关使用各自独立的预算**（不再共用一个 timeout）：
+    - dc_timeout  第一关，默认按延迟门槛派生（见 tg_dc_timeout_for）
+    - web_timeout 第二关，默认 TG_TEST_TIMEOUT_SEC（8s，与门槛无关）
+    - deadline    单节点总预算，默认 max(20, dc + web + 2)，随门槛自动扩展
 
     sink：可选回调，每节点调用一次，收到
     {"stage": "dc_fail"|"deadline"|"latency_rejected"|"web_fail"|"ok",
@@ -616,15 +658,18 @@ def test_telegram_via_socks5(host, port, timeout=None, deadline=None, sink=None,
     已知偏差：被剪枝节点的第二关结果未知，这里按「连通」计（对拉黑是保守
     方向——宁可不清零，也不误增连败）。
     """
-    if timeout is None:
-        timeout = TG_TEST_TIMEOUT_SEC
+    if dc_timeout is None:
+        dc_timeout = tg_dc_timeout_for(
+            TG_LATENCY_LIMIT_MS if max_latency_ms is None else max_latency_ms)
+    if web_timeout is None:
+        web_timeout = TG_TEST_TIMEOUT_SEC
     if deadline is None:
-        deadline = TG_TEST_DEADLINE_SEC
-    stage = max(1.0, min(timeout, deadline))
+        deadline = tg_deadline_for(dc_timeout, web_timeout)
+
     started = time.perf_counter()
 
     t_gate = time.perf_counter()
-    dc_ms = test_socks5_telegram_dc(host, port, stage)
+    dc_ms = test_socks5_telegram_dc(host, port, dc_timeout)
     dc_elapsed = (time.perf_counter() - t_gate) * 1000
     if dc_ms is None:
         if sink is not None:
@@ -642,7 +687,9 @@ def test_telegram_via_socks5(host, port, timeout=None, deadline=None, sink=None,
             sink({"stage": "deadline", "dc_ms": round(dc_elapsed, 1), "web_ms": None})
         return None
     t_gate = time.perf_counter()
-    web_ok = test_telegram_web_via_socks5(host, port, min(timeout, remaining)) is not None
+    # 第二关用自己的预算，但不越过剩余总预算——防止第一关吃光后拿到极短超时
+    web_ok = test_telegram_web_via_socks5(
+        host, port, min(web_timeout, remaining)) is not None
     web_elapsed = (time.perf_counter() - t_gate) * 1000
     if sink is not None:
         sink({"stage": "ok" if web_ok else "web_fail",
