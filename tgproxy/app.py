@@ -33,6 +33,10 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "tgproxy.log")
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 
+# UI 窗口用的独立浏览器 profile（见 open_app_window）。
+# 放 LOCALAPPDATA，不往程序目录里丢一堆 profile 文件；取不到就退回程序目录。
+LOCAL_DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or BASE_DIR, "tgproxy")
+
 DEFAULT_PORT = 8765
 MAX_PORT_OFFSET = 50
 # 单实例锁端口：不监听、只 bind，用来判断「是否已有本程序在跑」。
@@ -324,6 +328,39 @@ class TgProxyServer(ThreadingHTTPServer):
         self.manager = manager
         self.settings = settings
         self.scheduler = None
+        # 「最后一个页面关掉就退出」用：页面 pagehide 时打 /api/bye，宽限几秒；
+        # 期间只要有任何一次 /api/proxies 轮询进来就取消（覆盖刷新页面/切标签）。
+        self._bye_lock = threading.Lock()
+        self._bye_timer = None
+        self._served_ui = False
+
+    def note_ui_alive(self):
+        """收到页面轮询：标记「有人在看」，并取消待执行的退出。"""
+        with self._bye_lock:
+            self._served_ui = True
+            if self._bye_timer is not None:
+                self._bye_timer.cancel()
+                self._bye_timer = None
+
+    def schedule_exit(self, grace_sec):
+        """页面报告关闭：宽限 grace_sec 后停服务。没服务过任何页面就不理。"""
+        with self._bye_lock:
+            if not self._served_ui:
+                return False
+            if self._bye_timer is not None:
+                self._bye_timer.cancel()
+            timer = threading.Timer(grace_sec, self._exit_after_ui_closed)
+            timer.daemon = True
+            self._bye_timer = timer
+            timer.start()
+            return True
+
+    def _exit_after_ui_closed(self):
+        logging.getLogger("tgproxy").info("UI 已关闭，停止服务")
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
@@ -467,6 +504,9 @@ class ApiHandler(BaseHTTPRequestHandler):
         try:
             path = urlparse(self.path).path
             if path == "/api/proxies":
+                # 页面每 2.5s 轮询一次：这就是「还有人在看」的心跳。
+                # 顺手取消可能待执行的退出（刷新页面时会先 pagehide 再重新轮询）。
+                self.server.note_ui_alive()
                 state = self.server.manager.get_state()
                 state["next_run_in_sec"] = (
                     self.server.scheduler.next_run_in_sec()
@@ -527,6 +567,11 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._handle_settings_update()
             elif path == "/api/open_telegram":
                 self._handle_open_telegram()
+            elif path == "/api/bye":
+                # 页面 pagehide 时上报。宽限 3s：刷新/跳转会在宽限内重新轮询而取消；
+                # 真的关掉窗口就没有后续轮询，3s 后退出。
+                armed = self.server.schedule_exit(3.0)
+                self._send_json({"ok": True, "armed": armed})
             else:
                 self._send_json({"ok": False, "error": "Not Found"}, status=404)
         except Exception as exc:
@@ -693,6 +738,64 @@ class ApiHandler(BaseHTTPRequestHandler):
             self._send_bytes(fh.read(), content_type)
 
 
+def _find_app_browser():
+    """找一个能用 --app 模式的 Chromium 浏览器（Edge 优先：Windows 10/11 必装）。"""
+    candidates = []
+    for env_key, rel in (
+        ("ProgramFiles(x86)", r"Microsoft\Edge\Application\msedge.exe"),
+        ("ProgramFiles", r"Microsoft\Edge\Application\msedge.exe"),
+        ("ProgramFiles", r"Google\Chrome\Application\chrome.exe"),
+        ("ProgramFiles(x86)", r"Google\Chrome\Application\chrome.exe"),
+        ("LOCALAPPDATA", r"Google\Chrome\Application\chrome.exe"),
+    ):
+        root = os.environ.get(env_key)
+        if root:
+            candidates.append(os.path.join(root, rel))
+    for path in candidates:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def open_app_window(address):
+    """用系统已装浏览器开一个无地址栏的独立窗口；没有可用浏览器时返回 False。
+
+    为什么不用 pywebview：本项目对外承诺「纯标准库、零第三方依赖」（README 第 3 行）。
+    pywebview 在 Windows 上要拖 pythonnet + clr_loader，exe 体积和打包失败面都会
+    明显变大，还要求目标机装了 WebView2 运行时。`--app` 复用系统必装的浏览器，
+    零依赖、零体积增长，观感（无地址栏、无标签页、独立任务栏图标）与嵌入窗口一致。
+
+    **独立的 --user-data-dir 是必须的**：Edge 已在运行时，不带它会把新窗口交接给
+    既有进程。
+
+    **不跟踪这个子进程**：实测 Edge 的启动器把窗口交给浏览器主进程后自己立刻退出
+    （Popen.poll() 1.5s 内就返回 0），句柄根本代表不了窗口。想靠它判断「窗口关没关」
+    是错的 —— 改由页面 `pagehide` 上报（见 /api/bye）。
+
+    返回 False 只在「压根找不到浏览器」时出现；找到了就假定窗口起来了，
+    不再退回 webbrowser，否则会同时开一个 app 窗口 + 一个浏览器标签。
+    """
+    exe = _find_app_browser()
+    if not exe:
+        return False
+    profile = os.path.join(LOCAL_DATA_DIR, "ui-profile")
+    try:
+        os.makedirs(profile, exist_ok=True)
+        subprocess.Popen(
+            [exe,
+             "--app=%s" % address,
+             "--window-size=1280,820",
+             "--user-data-dir=%s" % profile,
+             "--no-first-run",
+             "--no-default-browser-check"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    return True
+
+
 def main():
     setup_logging()
     config = load_config()
@@ -715,10 +818,12 @@ def main():
             "检测到已有实例（端口 %d），打开浏览器后退出", running_port
         )
         print("tgproxy %s 已在运行: %s" % (APP_VERSION, address))
-        try:
-            webbrowser.open(address)
-        except Exception:
-            pass
+        # 只负责把窗口打开，不跟踪生命周期 —— 服务不是这个进程的
+        if not open_app_window(address):
+            try:
+                webbrowser.open(address)
+            except Exception:
+                pass
         return
 
     manager = ProxyManager(
@@ -752,10 +857,12 @@ def main():
     # 否则「浏览器没弹出来」时用户和排查者都无从知道端口
     logging.getLogger("tgproxy").info("tgproxy %s 已启动: %s", APP_VERSION, address)
     logging.getLogger("tgproxy").info("配置文件: %s", CONFIG_PATH)
-    try:
-        webbrowser.open(address)
-    except Exception:
-        print("无法自动打开浏览器，请手动访问: %s" % address)
+    if not open_app_window(address):
+        # 没有可用浏览器：退回默认浏览器，至少别让用户什么都看不到
+        try:
+            webbrowser.open(address)
+        except Exception:
+            print("无法自动打开浏览器，请手动访问: %s" % address)
 
     try:
         server.serve_forever()

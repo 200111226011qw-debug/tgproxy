@@ -879,6 +879,12 @@
   });
 
   /* ---------- 启动 ---------- */
+  // 关窗口/标签页时上报一次，后端宽限 3s 后退出（期间有新轮询就取消，覆盖刷新）。
+  // 用 sendBeacon：页面卸载时 fetch 会被取消，beacon 保证发得出去。
+  window.addEventListener("pagehide", function () {
+    if (navigator.sendBeacon) { navigator.sendBeacon("/api/bye"); }
+  });
+
   fetchJson("/api/version").then(function (v) {
     $("app-version").textContent = "v" + (v && v.version ? v.version : "—");
   }).catch(function () { $("app-version").textContent = "v—"; });
