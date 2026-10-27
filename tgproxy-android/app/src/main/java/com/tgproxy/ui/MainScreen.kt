@@ -212,26 +212,25 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         )
                     }
                     // 自适应指标网格（可用数 / 超门槛 / DC 失败 / 站点失败 / TCP 不通 / 已拉黑）
+                    // 水平内边距由 contentPadding 统一给，此处不再叠加
                     item {
                         MetricGrid(
                             stats = uiState.stats,
                             tgStats = uiState.tgStats,
-                            modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
                     // 漏斗解释：把「测了 N 个却只剩 M 个」说清楚
-                    item {
-                        TgGateSummary(
-                            tgStats = uiState.tgStats,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
+                    // 槽位按 hasData 判定：无数据时整个 item 不发射，避免 spacedBy 留出空档
+                    if (uiState.tgStats.hasData) {
+                        item {
+                            TgGateSummary(tgStats = uiState.tgStats)
+                        }
                     }
                     // 上轮分阶段耗时（本轮进行中没有实时值）
-                    item {
-                        StageTimeline(
-                            durations = uiState.durations,
-                            modifier = Modifier.padding(horizontal = 16.dp),
-                        )
+                    if (uiState.durations.hasData) {
+                        item {
+                            StageTimeline(durations = uiState.durations)
+                        }
                     }
 
                     // 错误提示条（条件显示）

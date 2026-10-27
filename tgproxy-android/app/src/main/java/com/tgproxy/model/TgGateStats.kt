@@ -38,4 +38,13 @@ data class TgGateStats(
     val ok: Int = 0,
 ) {
     val total: Int get() = dcFail + latencyRejected + webFail + ok
+
+    /**
+     * 本轮是否有任何节点走过两关。
+     *
+     * 冷启动（还没跑完一轮）时四项全 0，UI 不该显示漏斗卡片 —— 显示
+     * 「本轮 0 个节点」会让人以为测过但全军覆没。这个判据同时被组件内部和
+     * `LazyColumn` 的 item 槽位使用，定义只此一处。
+     */
+    val hasData: Boolean get() = total > 0
 }

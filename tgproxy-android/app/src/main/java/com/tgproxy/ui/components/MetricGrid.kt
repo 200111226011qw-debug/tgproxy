@@ -7,10 +7,10 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -19,11 +19,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.tgproxy.model.StageDurations
 import com.tgproxy.model.Stats
 import com.tgproxy.model.TgGateStats
+import com.tgproxy.model.ThemeMode
+import com.tgproxy.ui.theme.TgProxyTheme
 
 /**
  * 仪表盘指标网格（非惰性）。
@@ -34,6 +38,9 @@ import com.tgproxy.model.TgGateStats
  * 也省掉 IntrinsicSize 那堆麻烦。
  *
  * 列数按可用宽度切：手机 2 列，平板（≥480dp）3 列。
+ *
+ * 注意：本组件不自带水平内边距 —— 调用方的 `LazyColumn.contentPadding`
+ * 已经给了 16dp。自己再加一层会变成 32dp，比上下相邻的 Hero 卡窄一圈。
  */
 @Composable
 fun MetricGrid(
@@ -41,13 +48,14 @@ fun MetricGrid(
     tgStats: TgGateStats,
     modifier: Modifier = Modifier,
 ) {
+    val palette = dashboardAccents()
     val items = listOf(
-        MetricItem("可用节点", stats.available, AccentGreen, highlight = true),
-        MetricItem("超门槛剔除", tgStats.latencyRejected, AccentAmber),
-        MetricItem("DC 连接失败", tgStats.dcFail, AccentRed),
-        MetricItem("站点验证失败", tgStats.webFail, AccentRed),
-        MetricItem("TCP 不通", stats.dropped, AccentGray),
-        MetricItem("已拉黑", stats.blacklisted, AccentGray),
+        MetricItem("可用节点", stats.available, palette.green, highlight = true),
+        MetricItem("超门槛剔除", tgStats.latencyRejected, palette.amber),
+        MetricItem("DC 连接失败", tgStats.dcFail, palette.red),
+        MetricItem("站点验证失败", tgStats.webFail, palette.red),
+        MetricItem("TCP 不通", stats.dropped, palette.gray),
+        MetricItem("已拉黑", stats.blacklisted, palette.gray),
     )
 
     BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
@@ -110,7 +118,7 @@ private fun MetricCard(item: MetricItem, modifier: Modifier = Modifier) {
  */
 @Composable
 fun TgGateSummary(tgStats: TgGateStats, modifier: Modifier = Modifier) {
-    if (tgStats.total == 0) return
+    if (!tgStats.hasData) return
     val parts = buildList {
         if (tgStats.dcFail > 0) add("${tgStats.dcFail} 个连不上 DC")
         if (tgStats.latencyRejected > 0) add("${tgStats.latencyRejected} 个超门槛被剪枝")
@@ -155,13 +163,14 @@ fun TgGateSummary(tgStats: TgGateStats, modifier: Modifier = Modifier) {
  */
 @Composable
 fun StageTimeline(durations: StageDurations, modifier: Modifier = Modifier) {
-    if (durations.totalMs <= 0) return
+    if (!durations.hasData) return
+    val palette = dashboardAccents()
     val rows = listOf(
-        Triple("抓取", durations.fetchMs, AccentBlue),
-        Triple("解析合并", durations.prepareMs, AccentGray),
-        Triple("TCP 预筛", durations.tcpMs, AccentBlue),
-        Triple("TG 实测", durations.tgMs, AccentPurple),
-        Triple("汇总落盘", durations.commitMs, AccentGreen),
+        Triple("抓取", durations.fetchMs, palette.blue),
+        Triple("解析合并", durations.prepareMs, palette.gray),
+        Triple("TCP 预筛", durations.tcpMs, palette.blue),
+        Triple("TG 实测", durations.tgMs, palette.purple),
+        Triple("汇总落盘", durations.commitMs, palette.green),
     )
     val total = durations.totalMs.coerceAtLeast(1)
 
@@ -223,9 +232,145 @@ private fun StageRow(label: String, ms: Long, fraction: Float, color: Color) {
     }
 }
 
-private val AccentGreen = Color(0xFF16A34A)
-private val AccentAmber = Color(0xFFD97706)
-private val AccentRed = Color(0xFFDC2626)
-private val AccentBlue = Color(0xFF2563EB)
-private val AccentPurple = Color(0xFF7C3AED)
-private val AccentGray = Color(0xFF6B7280)
+// ---------------------------------------------------------------------------
+// 强调色板
+// ---------------------------------------------------------------------------
+
+/**
+ * 强调色随主题切换。
+ *
+ * 浅色下用 600 档（够深才压得住白底），深色下换 400 档 —— 同一个 `#16A34A`
+ * 放在深藏青底上对比度只有 2.4:1，数字会糊成一团。
+ *
+ * 判据取自 `MaterialTheme.colorScheme.background` 的亮度，而不是
+ * `isSystemInDarkTheme()`：应用内的 `ThemeMode` 可以强制反着来（系统深色 +
+ * 用户选浅色），只有读实际生效的配色才知道眼前是哪种。
+ */
+private data class DashboardAccents(
+    val green: Color,
+    val amber: Color,
+    val red: Color,
+    val blue: Color,
+    val purple: Color,
+    val gray: Color,
+)
+
+@Composable
+private fun dashboardAccents(): DashboardAccents {
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    return if (dark) {
+        DashboardAccents(
+            green = Color(0xFF4ADE80),
+            amber = Color(0xFFFBBF24),
+            red = Color(0xFFF87171),
+            blue = Color(0xFF60A5FA),
+            purple = Color(0xFFA78BFA),
+            gray = Color(0xFF9CA3AF),
+        )
+    } else {
+        DashboardAccents(
+            green = Color(0xFF16A34A),
+            amber = Color(0xFFD97706),
+            red = Color(0xFFDC2626),
+            blue = Color(0xFF2563EB),
+            purple = Color(0xFF7C3AED),
+            gray = Color(0xFF6B7280),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 预览
+//
+// 这些数字取自 2026-10-28 桌面基线的一轮真实分布（量级一致，非真实抓取结果），
+// 用来在 Android Studio 里检查折行、间距、深浅色对比，不参与任何运行逻辑。
+// ---------------------------------------------------------------------------
+
+private val PreviewStats = Stats(
+    available = 11,
+    unverified = 0,
+    tgFailed = 260,
+    overThreshold = 75,
+    dropped = 1200,
+    excluded = 0,
+    blacklisted = 40,
+    tested = 1546,
+)
+
+private val PreviewTgStats = TgGateStats(
+    dcFail = 1200,
+    latencyRejected = 75,
+    webFail = 260,
+    ok = 11,
+)
+
+private val PreviewDurations = StageDurations(
+    fetchMs = 16_600,
+    prepareMs = 900,
+    tcpMs = 8_400,
+    tgMs = 27_600,
+    commitMs = 200,
+    totalMs = 53_700,
+)
+
+/**
+ * 与 MainScreen 一致的组合方式：外层 16dp 水平内边距（等价 `contentPadding`），
+ * 三块之间 8dp 间距（等价 `Arrangement.spacedBy`）。
+ */
+@Composable
+private fun DashboardBlocks(
+    stats: Stats,
+    tgStats: TgGateStats,
+    durations: StageDurations,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        MetricGrid(stats = stats, tgStats = tgStats)
+        TgGateSummary(tgStats = tgStats)
+        StageTimeline(durations = durations)
+    }
+}
+
+@Preview(name = "仪表盘 · 浅色 · 手机 411dp", showBackground = true, widthDp = 411, heightDp = 780)
+@Composable
+private fun PreviewDashboardLight() {
+    TgProxyTheme(themeMode = ThemeMode.LIGHT) {
+        DashboardBlocks(PreviewStats, PreviewTgStats, PreviewDurations)
+    }
+}
+
+@Preview(name = "仪表盘 · 深色 · 手机 411dp", showBackground = true, widthDp = 411, heightDp = 780)
+@Composable
+private fun PreviewDashboardDark() {
+    TgProxyTheme(themeMode = ThemeMode.DARK) {
+        DashboardBlocks(PreviewStats, PreviewTgStats, PreviewDurations)
+    }
+}
+
+@Preview(name = "仪表盘 · 浅色 · 平板 800dp", showBackground = true, widthDp = 800, heightDp = 600)
+@Composable
+private fun PreviewDashboardTablet() {
+    TgProxyTheme(themeMode = ThemeMode.LIGHT) {
+        DashboardBlocks(PreviewStats, PreviewTgStats, PreviewDurations)
+    }
+}
+
+/**
+ * 冷启动：没有任何一轮数据。
+ *
+ * 这个预览专门用来盯「空卡片留下的间距」—— `TgGateSummary` 和 `StageTimeline`
+ * 在无数据时都不发射节点，如果调用方还留着 item 槽位，`spacedBy` 会在中间
+ * 留出看不见的空隙。
+ */
+@Preview(name = "仪表盘 · 冷启动（无数据）", showBackground = true, widthDp = 411, heightDp = 420)
+@Composable
+private fun PreviewDashboardColdStart() {
+    TgProxyTheme(themeMode = ThemeMode.LIGHT) {
+        DashboardBlocks(Stats(), TgGateStats(), StageDurations())
+    }
+}

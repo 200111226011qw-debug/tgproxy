@@ -31,6 +31,14 @@ data class StageDurations(
     val measuredSumMs: Long
         get() = fetchMs + prepareMs + tcpMs + tgMs + commitMs
 
+    /**
+     * 是否有可展示的耗时。
+     *
+     * 判据用 [totalMs] 而不是 [measuredSumMs]：时间轴画的是各段占整轮的比例，
+     * 分母就是 [totalMs]；用分子之和做判据会出现「和为正但分母为 0」的除零。
+     */
+    val hasData: Boolean get() = totalMs > 0
+
     companion object {
         /** 纳秒差转毫秒（向下取整，避免虚报）。 */
         fun msBetween(startNanos: Long, endNanos: Long): Long =
