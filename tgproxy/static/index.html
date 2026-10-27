@@ -285,6 +285,10 @@
     box-shadow: 0 8px 24px rgba(16, 24, 40, .16); padding: 12px 14px;
   }
   .tg-fallback[hidden] { display: none; }
+  /* 没有链接可复制时把输入框和「复制链接」收起来。
+     显式写死而不是靠 UA 的 [hidden]：本项目已经踩过两次
+     「组件自己设了 display，压过 UA 的 [hidden]{display:none}」。 */
+  .tg-fallback input[hidden], .tg-fallback .btn[hidden] { display: none; }
   .tg-fallback .row {
     display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
   }
@@ -820,25 +824,40 @@
         btn.textContent = "已唤起 Telegram";
         return;
       }
-      // 协议未注册时后端会带回 tg:// 链接，改为手动复制兜底
-      if (data && data.url) {
-        showTgFallback(data.error || "无法自动唤起 Telegram", data.url, data.hint);
-        btn.textContent = "请手动复制";
-      } else {
-        btn.textContent = (data && data.error) ? String(data.error).slice(0, 24) : "唤起失败";
-      }
+      // 不管失败原因是「tg:// 没注册」「代理已不在列表」还是服务端异常，
+      // 都把真实原因摊开；能拿到链接就顺手给出来。以前这里只写一句
+      // 「唤起失败」，用户既不知道原因、也没有可复制的链接。
+      var url = (data && data.url) || "";
+      showTgFallback(
+        (data && data.error) || "无法自动唤起 Telegram",
+        url,
+        (data && data.hint) || ""
+      );
+      btn.textContent = url ? "请手动复制" : "见下方提示";
       setTimeout(function () { btn.textContent = "添加到 Telegram"; btn.disabled = false; }, 2500);
     }).catch(function () {
-      btn.textContent = "唤起失败";
+      // 请求本身失败：多半是 tgproxy 已经退出，或端口变了
+      showTgFallback("无法连接本地服务（tgproxy 可能已退出），请确认它还在运行", "", "");
+      btn.textContent = "见下方提示";
       setTimeout(function () { btn.textContent = "添加到 Telegram"; btn.disabled = false; }, 2500);
     });
   });
 
+  /**
+   * 唤起失败的兜底面板。**有链接就给出可复制的输入框，没链接就只说原因** ——
+   * 绝不留一句「唤起失败」让用户对着屏幕发呆。
+   */
   function showTgFallback(message, url, hint) {
-    $("tg-fallback-msg").textContent = hint ? (message + " — " + hint) : message;
-    $("tg-link-input").value = url;
+    var text = hint ? (message + " — " + hint) : message;
+    $("tg-fallback-msg").textContent = text;
+    var input = $("tg-link-input");
+    var copyBtn = $("tg-copy-btn");
+    input.value = url || "";
+    // 没有链接时把空输入框和「点了没反应」的复制按钮收起来
+    input.hidden = !url;
+    copyBtn.hidden = !url;
     $("tg-fallback").hidden = false;
-    $("tg-link-input").select();
+    if (url) { input.select(); }
   }
 
   refreshBtn.addEventListener("click", refresh);
