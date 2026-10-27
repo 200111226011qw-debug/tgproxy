@@ -6,6 +6,7 @@ import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType
 import com.tgproxy.model.RefreshProgress
 import com.tgproxy.model.RefreshStage
+import com.tgproxy.model.StageDurations
 import com.tgproxy.model.Stats
 import com.tgproxy.model.TgVerdict
 import java.io.IOException
@@ -54,6 +55,8 @@ class ProxyRepository(
             val entries: List<ProxyEntry>,
             val stats: Stats,
             val updatedAt: String,
+            /** 分阶段耗时（纯度量，不参与任何判定）。 */
+            val durations: StageDurations = StageDurations(),
         ) : RefreshResult
 
         /** 失败：[error] 固定前缀「抓取代理列表失败：」。 */
@@ -77,9 +80,12 @@ class ProxyRepository(
         proxyListUrls: List<String>,
         onProgress: (RefreshProgress) -> Unit = {},
     ): RefreshResult = try {
+        // 计时用 nanoTime：currentTimeMillis 会被校时/改表跳变，差值可能为负
+        val tStart = System.nanoTime()
         val urls = proxyListUrls.distinct().take(Constants.FETCH_MAX_SOURCES)
         val texts = fetchAll(urls) { done -> onProgress(RefreshProgress(RefreshStage.FETCH, done, urls.size)) }
         onProgress(RefreshProgress(RefreshStage.FETCH, urls.size, urls.size))
+        val tFetched = System.nanoTime()
 
         val merged = mutableListOf<ProxyEntry>()
         val seenKept = HashSet<Pair<String, Int>>()
@@ -111,11 +117,13 @@ class ProxyRepository(
 
         // 全局抽样至 MAX_TOTAL：preferred 优先保留，其余随机
         val toTest = samplePreferred(eligible, preferredKeys, Constants.MAX_TOTAL)
+        val tPrepared = System.nanoTime()
 
         // 第一阶段：TCP 预筛（并发）
         val tested = tester.testAll(toTest) { done, total ->
             onProgress(RefreshProgress(RefreshStage.TCP_TEST, done, total))
         }
+        val tTcpDone = System.nanoTime()
         val tcpOk = tested.filter { it.status == ProxyStatus.AVAILABLE }
         // TCP 不通 → 连败 +1；通过则留到 TG 阶段判定
         for (item in tested) {
@@ -129,6 +137,7 @@ class ProxyRepository(
             onProgress(RefreshProgress(RefreshStage.TG_TEST, done, total))
         }
 
+        val tTgDone = System.nanoTime()
         // TG 两关通过且延迟 ≤ 门槛才保留；两关失败与超门槛分开计数（空态可解释）
         val kept = mutableListOf<ProxyEntry>()
         var unverified = 0
@@ -167,10 +176,22 @@ class ProxyRepository(
             }
         }
         knownBad.persist()
-        val result = RefreshResult.Success(kept, stats, nowText())
         // 沉淀本轮验证通过的节点（开关关闭时不写）；失败静默（下轮再试）
         knownGood.save(kept)
-        result
+        // commit 段把统计汇总、连败记账、两次落盘都包进来，这样五段之和能对上
+        // 总耗时，不留未计时的缝
+        val tDone = System.nanoTime()
+        RefreshResult.Success(
+            kept, stats, nowText(),
+            StageDurations(
+                fetchMs = StageDurations.msBetween(tStart, tFetched),
+                prepareMs = StageDurations.msBetween(tFetched, tPrepared),
+                tcpMs = StageDurations.msBetween(tPrepared, tTcpDone),
+                tgMs = StageDurations.msBetween(tTcpDone, tTgDone),
+                commitMs = StageDurations.msBetween(tTgDone, tDone),
+                totalMs = StageDurations.msBetween(tStart, tDone),
+            ),
+        )
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

@@ -298,6 +298,60 @@ class ProxyRepositoryTest {
         }
     }
 
+    /** 阻塞式假测试器：用真实耗时让 tcpMs 可观测（测试调度器的 delay 是虚拟时间）。 */
+    private class BlockingTester(private val sleepMs: Long) : LatencyTester {
+        override suspend fun testAll(
+            entries: List<ProxyEntry>,
+            onProgress: (Int, Int) -> Unit,
+        ): List<ProxyEntry> {
+            Thread.sleep(sleepMs)
+            return entries.map { it.copy(latencyMs = 30, status = ProxyStatus.AVAILABLE) }
+        }
+    }
+
+    @Test
+    fun `分阶段耗时齐全且五段之和接近总耗时`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+            val repository = ProxyRepository(
+                source, BlockingTester(25), SelectiveGate(), ioDispatcher = td,
+            )
+
+            val result = repository.refresh("https://example.com/proxy.txt")
+
+            assertTrue(result is RefreshResult.Success)
+            result as RefreshResult.Success
+            val d = result.durations
+
+            // 每段非负
+            listOf(d.fetchMs, d.prepareMs, d.tcpMs, d.tgMs, d.commitMs, d.totalMs)
+                .forEach { assertTrue("耗时为负：$d", it >= 0) }
+            // TCP 段真的被测量到（假件阻塞 25ms）
+            assertTrue("tcpMs 没测到：$d", d.tcpMs >= 15)
+            // 五段之和 ≈ 总耗时（差额只来自纳秒转毫秒的截断）
+            assertTrue(
+                "五段之和 ${d.measuredSumMs} 与总耗时 ${d.totalMs} 差得太多",
+                kotlin.math.abs(d.measuredSumMs - d.totalMs) <= 10,
+            )
+            // 总耗时不得小于 TCP 段
+            assertTrue("totalMs 小于 tcpMs：$d", d.totalMs >= d.tcpMs)
+        }
+    }
+
+    @Test
+    fun `抓取失败时返回 Failure 且不产出耗时`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val source = FakeSource().apply { nextError = IOException("boom") }
+            val repository = ProxyRepository(source, AllPassTester(), SelectiveGate(), ioDispatcher = td)
+
+            val result = repository.refresh("https://example.com/proxy.txt")
+
+            assertTrue(result is RefreshResult.Failure)
+        }
+    }
+
     @Test
     fun `黑名单节点不占 MAX_TOTAL 配额（先过滤后抽样）`() {
         // 回归（2026-10-28）：此前是「先抽样、后过滤」，黑名单节点会占掉
