@@ -9,6 +9,7 @@ __pycache__/
 *.pyc
 config.json
 known_good.json
+known_bad.json
 source_health.json
 
 # 发行产物（dist/ 仅本地备料，不进仓库）
@@ -27,4 +28,6 @@ captures/
 # PyInstaller（桌面版打包产物）
 dist/
 build/
+# tgproxy/tgproxy.spec 已刻意入库（-f 强制添加），以保证从 tag 可重建 exe；
+# 本行仅忽略将来新增的其他 spec
 *.spec
