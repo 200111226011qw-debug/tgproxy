@@ -596,11 +596,16 @@ def test_telegram_web_via_socks5(host, port, timeout=None,
             pass
 
 
-def test_telegram_via_socks5(host, port, timeout=None, deadline=None):
+def test_telegram_via_socks5(host, port, timeout=None, deadline=None, sink=None):
     """TG 实测（管线入口，两关串行）：先经代理 CONNECT Telegram 数据中心
     （客户端实际线路，其往返毫秒作为延迟），通过后再全链路访问
     desktop.telegram.org 验证可用且无劫持；任一关失败返回 None。
     两关共享单节点总预算 deadline（秒），防个别节点拖垮整轮。
+
+    sink：可选回调，每节点调用一次，收到
+    {"stage": "dc_fail"|"deadline"|"web_fail"|"ok", "dc_ms": float, "web_ms": float|None}。
+    只用于度量两关各自的耗时分布（失败节点的耗时在返回值里是拿不到的），
+    不影响返回值与调用语义。
     """
     if timeout is None:
         timeout = TG_TEST_TIMEOUT_SEC
@@ -608,15 +613,64 @@ def test_telegram_via_socks5(host, port, timeout=None, deadline=None):
         deadline = TG_TEST_DEADLINE_SEC
     stage = max(1.0, min(timeout, deadline))
     started = time.perf_counter()
+
+    t_gate = time.perf_counter()
     dc_ms = test_socks5_telegram_dc(host, port, stage)
+    dc_elapsed = (time.perf_counter() - t_gate) * 1000
     if dc_ms is None:
+        if sink is not None:
+            sink({"stage": "dc_fail", "dc_ms": round(dc_elapsed, 1), "web_ms": None})
         return None
     remaining = deadline - (time.perf_counter() - started)
     if remaining <= 1.0:
+        if sink is not None:
+            sink({"stage": "deadline", "dc_ms": round(dc_elapsed, 1), "web_ms": None})
         return None
-    if test_telegram_web_via_socks5(host, port, min(timeout, remaining)) is None:
+    t_gate = time.perf_counter()
+    web_ok = test_telegram_web_via_socks5(host, port, min(timeout, remaining)) is not None
+    web_elapsed = (time.perf_counter() - t_gate) * 1000
+    if sink is not None:
+        sink({"stage": "ok" if web_ok else "web_fail",
+              "dc_ms": round(dc_elapsed, 1),
+              "web_ms": round(web_elapsed, 1)})
+    return dc_ms if web_ok else None
+
+
+def _percentile(values, q):
+    """最近秩百分位（样本量小时比插值更贴近观测值）。"""
+    if not values:
         return None
-    return dc_ms
+    ordered = sorted(values)
+    index = int(round(q * (len(ordered) - 1)))
+    return round(ordered[max(0, min(len(ordered) - 1, index))], 1)
+
+
+def summarize_tg_gates(samples):
+    """把逐节点的两关耗时样本汇总成分布（不保留原始样本，避免状态膨胀）。
+
+    回答三个问题：多少节点卡在第一关 / 第二关；成功节点的两关各花多久；
+    失败节点的耗时是不是恰好顶在超时上限。
+    """
+    summary = {
+        "total": len(samples),
+        "timeout_sec": TG_TEST_TIMEOUT_SEC,
+        "deadline_sec": TG_TEST_DEADLINE_SEC,
+    }
+    for stage in ("dc_fail", "deadline", "web_fail", "ok"):
+        rows = [r for r in samples if r.get("stage") == stage]
+        item = {"count": len(rows)}
+        dc = [r["dc_ms"] for r in rows if r.get("dc_ms") is not None]
+        if dc:
+            item["dc_p50"] = _percentile(dc, 0.5)
+            item["dc_p90"] = _percentile(dc, 0.9)
+            item["dc_max"] = round(max(dc), 1)
+        web = [r["web_ms"] for r in rows if r.get("web_ms") is not None]
+        if web:
+            item["web_p50"] = _percentile(web, 0.5)
+            item["web_p90"] = _percentile(web, 0.9)
+            item["web_max"] = round(max(web), 1)
+        summary[stage] = item
+    return summary
 
 
 def sort_proxies(proxies):
@@ -661,6 +715,8 @@ class ProxyManager:
         # 上一轮的分阶段耗时（秒）：fetch / prepare / tcp / tg / commit / total。
         # 纯度量，不参与任何判定；P2（流水线化）要不要做，取决于 tcp 与 tg 的占比。
         self._stage_durations = {}
+        # 上一轮 TG 两关各自的耗时分布（dc_fail / web_fail / ok 的计数与分位）
+        self._tg_gate_stats = {}
         self._load_known_bad()
 
     def set_proxy_list_urls(self, urls):
@@ -708,6 +764,7 @@ class ProxyManager:
                 "notice": self._notice,
                 "stats": dict(self._stats),
                 "stage_durations": dict(self._stage_durations),
+                "tg_gate_stats": dict(self._tg_gate_stats),
                 "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
             }
@@ -1199,12 +1256,22 @@ class ProxyManager:
         同时开两条连接触发限流的假失败）；延迟取「经代理到 Telegram 数据中心的往返」
         （与 Telegram 客户端实际线路一致）。仅 SOCKS5 参与；MTProto 标记为未验证。"""
         if not entries:
+            with self._lock:
+                self._tg_gate_stats = {}
             return []
+        samples = []
+        samples_lock = threading.Lock()
+
+        def collect(record):
+            with samples_lock:
+                samples.append(record)
+
         results = [None] * len(entries)
         with ThreadPoolExecutor(max_workers=TG_TEST_MAX_WORKERS) as executor:
             futures = {
                 index: executor.submit(
-                    test_telegram_via_socks5, entry["host"], entry["port"]
+                    test_telegram_via_socks5, entry["host"], entry["port"],
+                    sink=collect,
                 )
                 for index, entry in enumerate(entries)
                 if entry["type"] == "socks5"
@@ -1222,6 +1289,8 @@ class ProxyManager:
                     item["tg_ok"] = None
                     item["tg_latency_ms"] = None
                     results[index] = item
+        with self._lock:
+            self._tg_gate_stats = summarize_tg_gates(samples)
         return [item for item in results if item is not None]
 
     def _test_entries(self, entries):

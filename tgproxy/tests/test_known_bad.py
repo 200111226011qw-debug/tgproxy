@@ -98,7 +98,8 @@ def test_full_refresh_blacklists_after_three_rounds(monkeypatch):
         pm, "fetch_proxy_text",
         lambda url, timeout=15: ("socks5://7.7.7.7:1080\nsocks5://7.7.7.8:1080", False))
     monkeypatch.setattr(pm, "test_tcp_latency", lambda host, port, timeout=5: 50.0)
-    monkeypatch.setattr(pm, "test_telegram_via_socks5", lambda host, port: None)
+    monkeypatch.setattr(pm, "test_telegram_via_socks5",
+                        lambda host, port, sink=None: None)
 
     for _ in range(3):
         m.refresh()
@@ -129,7 +130,7 @@ def test_full_refresh_pass_clears_and_over_threshold_counts_pass(monkeypatch):
     fail = {"ok": False}
     monkeypatch.setattr(
         pm, "test_telegram_via_socks5",
-        lambda host, port: None if not fail["ok"] else 1500)  # 过两关但超门槛
+        lambda host, port, sink=None: None if not fail["ok"] else 1500)  # 过两关但超门槛
 
     m.refresh()
     m.refresh()
@@ -154,7 +155,8 @@ def test_blacklist_skips_even_known_good_entries(monkeypatch):
     monkeypatch.setattr(
         pm, "fetch_proxy_text", lambda url, timeout=15: ("", False))
     monkeypatch.setattr(pm, "test_tcp_latency", lambda host, port, timeout=5: 50.0)
-    monkeypatch.setattr(pm, "test_telegram_via_socks5", lambda host, port: None)
+    monkeypatch.setattr(pm, "test_telegram_via_socks5",
+                        lambda host, port, sink=None: None)
     # 沉淀了一个节点（须带 tg_ok=True 才会真正写入）：每轮靠 known_good 补入复测，但 TG 恒不过
     m._save_known_good([{"host": "3.3.3.3", "port": 1080, "tg_ok": True,
                          "tg_latency_ms": 400}])

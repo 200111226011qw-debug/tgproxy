@@ -46,8 +46,10 @@ class _Patched:
             # 偶数尾号判死：制造一批 dropped，让 TCP/TG 两阶段都有量
             return 30 if int(host.rsplit(".", 1)[-1]) % 2 else None
 
-        def fake_tg(host, port, timeout=None, deadline=None):
+        def fake_tg(host, port, timeout=None, deadline=None, sink=None):
             time.sleep(self.tg_delay)
+            if sink is not None:
+                sink({"stage": "ok", "dc_ms": 30.0, "web_ms": 40.0})
             return 40
 
         pm.fetch_proxy_text = fake_fetch
@@ -109,7 +111,7 @@ def test_stage_durations_survive_zero_available():
     def fake_tcp(host, port, timeout=None):
         return None          # 全部 TCP 不通
 
-    def fake_tg(host, port, timeout=None, deadline=None):
+    def fake_tg(host, port, timeout=None, deadline=None, sink=None):
         raise AssertionError("TG 阶段不该被调用：没有节点通过 TCP")
 
     orig = (pm.fetch_proxy_text, pm.test_tcp_latency, pm.test_telegram_via_socks5)
