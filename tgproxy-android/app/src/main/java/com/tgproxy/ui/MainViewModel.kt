@@ -38,7 +38,8 @@ fun interface TimeSource {
  * 2. refreshAwait：`Mutex.tryLock` 互斥（第二调用直接忽略，等价桌面版 `_fetching`）；
  *    成功写 proxies/stats/updatedAt 并清 error；本轮 0 达标但已有列表时保留旧列表
  *    （等价桌面版「失败时保留旧列表」）；失败**仅**写 error（旧列表保留）；
- *    刷新期间 progress 逐阶段透传（抓取/TCP/TG done/total）；
+ *    刷新期间 progress 逐阶段透传（抓取/TCP/TG done/total），走**独立** StateFlow
+ *    [progress] 而非 uiState（高频字段，混进 uiState 会让整页跟着重组）；
  * 3. 倒计时循环：每秒 tick 写 countdownSec；到期后挂起等待一轮刷新完成再重置 deadline；
  * 4. onResumeSync：恢复 tick（保留 deadline）；超龄则立即补刷并重置 deadline；
  * 5. saveIntervalInput：非法输入只提示不持久化；合法写 DataStore，「已保存，立即生效」；
@@ -52,6 +53,20 @@ class MainViewModel(
 
     private val _uiState = MutableStateFlow(ProxyUiState())
     val uiState: StateFlow<ProxyUiState> = _uiState.asStateFlow()
+
+    /**
+     * 刷新进度：独立于 [uiState] 的高频通道。
+     *
+     * 为什么不放 uiState：进度每测一个节点就变一次（2000 节点 ≈ 2000 次），
+     * 每次都要 `copy()` 出一个新 `ProxyUiState`；而 `ProxyUiState` 含
+     * `List<ProxyEntry>`（接口类型 → Compose unstable），订阅它的整页都会
+     * 跟着重组。拆出来之后只有 Hero 卡订阅这条流，节点列表/漏斗/耗时卡
+     * 在进度跳动时纹丝不动。
+     *
+     * 生命周期：每轮刷新开始置 null，结束（含异常）置 null。
+     */
+    private val _progress = MutableStateFlow<RefreshProgress?>(null)
+    val progress: StateFlow<RefreshProgress?> = _progress.asStateFlow()
 
     private val _settings = MutableStateFlow(Settings())
     val settings: StateFlow<Settings> = _settings.asStateFlow()
@@ -118,9 +133,11 @@ class MainViewModel(
         if (!refreshMutex.tryLock()) return
         val startedNanos = timeSource.nowNanos()
         try {
-            _uiState.value = _uiState.value.copy(fetching = true, error = null, progress = null)
+            _uiState.value = _uiState.value.copy(fetching = true, error = null)
+            _progress.value = null
             val onProgress: (RefreshProgress) -> Unit = { progress ->
-                _uiState.value = _uiState.value.copy(progress = progress)
+                // 只写独立通道，绝不碰 _uiState —— 这条路径每轮要跑上千次
+                _progress.value = progress
             }
             when (val result = repository.refresh(resolveUrls(_settings.value), onProgress)) {
                 is RefreshResult.Success -> {
@@ -164,7 +181,8 @@ class MainViewModel(
                 }
             }
         } finally {
-            _uiState.value = _uiState.value.copy(fetching = false, progress = null)
+            _uiState.value = _uiState.value.copy(fetching = false)
+            _progress.value = null
             refreshMutex.unlock()
         }
     }

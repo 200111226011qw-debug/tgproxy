@@ -262,3 +262,35 @@ private fun HeroStatusCardPreview() {
         }
     }
 }
+
+/**
+ * 三个阶段的进度形态（progress 拆成独立流之后，这张卡是唯一订阅者）。
+ *
+ * 盯三件事：阶段名是否跟着换、`total` 未知时是否退回不确定进度条、
+ * done/total 在窄屏上会不会把阶段名挤掉。
+ */
+@Preview(name = "hero_three_stages", showBackground = true, widthDp = 380)
+@Composable
+private fun HeroStatusCardStagesPreview() {
+    TgProxyTheme(themeMode = com.tgproxy.model.ThemeMode.DARK) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            listOf(
+                RefreshProgress(RefreshStage.FETCH, 3, 8),
+                RefreshProgress(RefreshStage.TCP_TEST, 412, 2000),
+                // total = 0：总量未知，只显示阶段名 + 不确定进度条
+                RefreshProgress(RefreshStage.TG_TEST, 0, 0),
+            ).forEach { progress ->
+                HeroStatusCard(
+                    fetching = true,
+                    progress = progress,
+                    lastDurationMs = null,
+                    stats = Stats(),
+                    bestLatencyMs = null,
+                    countdownSec = -1,
+                    countdownStarted = false,
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
+    }
+}

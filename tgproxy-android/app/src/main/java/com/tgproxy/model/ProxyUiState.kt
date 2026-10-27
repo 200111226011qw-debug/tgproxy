@@ -3,9 +3,13 @@ package com.tgproxy.model
 /**
  * UI 状态快照（PRD 5.4；桌面版 /api/proxies 响应体的安卓进程内等价物）。
  *
+ * **不含刷新进度**：进度每测一个节点就变一次（2000 节点 = 2000 次），
+ * 放在这里会让每次变化都 `copy()` 出一个新快照，进而带着节点列表、
+ * 漏斗卡、耗时卡一起重组。它由 `MainViewModel.progress` 这条独立
+ * StateFlow 承载，只有 Hero 卡订阅。
+ *
  * @property updatedAt 最近一轮成功刷新的时间，格式 `yyyy-MM-dd HH:mm:ss`；从未成功时为 null
  * @property fetching 是否正在刷新（按钮禁用 + 列表遮罩）
- * @property progress 刷新阶段进度（fetching 时非空；阶段+done/total）
  * @property lastDurationMs 最近一轮刷新耗时（毫秒）；从未完成过时为 null
  * @property error 错误信息（抓取失败等）；下一轮成功刷新时清除
  * @property stats 六项统计
@@ -18,7 +22,6 @@ package com.tgproxy.model
 data class ProxyUiState(
     val updatedAt: String? = null,
     val fetching: Boolean = false,
-    val progress: RefreshProgress? = null,
     val lastDurationMs: Long? = null,
     val error: String? = null,
     val stats: Stats = Stats(),

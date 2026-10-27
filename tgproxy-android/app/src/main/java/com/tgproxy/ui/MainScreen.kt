@@ -200,9 +200,14 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         val bestLatencyMs = uiState.proxies
                             .filter { it.tgVerdict == TgVerdict.PASS && it.latencyMs != null }
                             .minOfOrNull { it.latencyMs!! }
+                        // progress 在 item 内部订阅，不在 MainScreen 顶层读：
+                        // 顶层读会让 MainScreen 每次进度跳动都重组，进而重跑整个
+                        // LazyColumn 的 content lambda（2000 条 keyed 列表的重新
+                        // 注册与 diff）。放在这里，一次进度变化只重组这一张卡。
+                        val progress by viewModel.progress.collectAsStateWithLifecycle()
                         HeroStatusCard(
                             fetching = uiState.fetching,
-                            progress = uiState.progress,
+                            progress = progress,
                             lastDurationMs = uiState.lastDurationMs,
                             stats = uiState.stats,
                             bestLatencyMs = bestLatencyMs,

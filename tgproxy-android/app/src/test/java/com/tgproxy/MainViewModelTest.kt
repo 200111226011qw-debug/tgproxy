@@ -5,6 +5,7 @@ import com.tgproxy.data.ProxyRepository
 import com.tgproxy.data.ProxySource
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
+import com.tgproxy.model.RefreshStage
 import com.tgproxy.model.Settings
 import com.tgproxy.model.ThemeMode
 import com.tgproxy.ui.MainViewModel
@@ -25,6 +26,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -492,6 +494,117 @@ class MainViewModelTest {
             viewModel.setKnownGoodEnabled(true)
             advanceTimeBy(100)
             assertEquals(true, store.savedKnownGood)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 进度通道拆分（progress 从 uiState 移出，独立 StateFlow）
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `进度高频更新不复制 uiState，整页不会被带着重组`() = runTest(testDispatcher) {
+        val firstGate = CompletableDeferred<Unit>()
+        val secondGate = CompletableDeferred<Unit>()
+        // 计数器是这条用例的**阳性对照**：必须证明进度真的跳了 50 次，
+        // 否则「uiState 没变」可能只是因为压根没触发进度（恒真）
+        val emissions = AtomicInteger(0)
+        val tester = object : LatencyTester {
+            override suspend fun testAll(
+                entries: List<ProxyEntry>,
+                onProgress: (Int, Int) -> Unit,
+            ): List<ProxyEntry> {
+                onProgress(1, 100)
+                emissions.incrementAndGet()
+                firstGate.await() // 停在这里，让测试取 uiState 快照
+                repeat(50) { i ->
+                    onProgress(i + 2, 100)
+                    emissions.incrementAndGet()
+                }
+                secondGate.await()
+                return entries.map { it.copy(latencyMs = 100, status = ProxyStatus.AVAILABLE) }
+            }
+        }
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, tester, FakeGate(), ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+        )
+        try {
+            advanceTimeBy(100)
+            // 停掉倒计时：它每秒也会 copy 一次 uiState，会污染下面的一致性断言
+            viewModel.onPause()
+
+            val snapshot = viewModel.uiState.value
+            assertTrue("刷新应当已经开始", snapshot.fetching)
+            assertEquals(
+                "进度没到 TCP 阶段：${viewModel.progress.value}",
+                RefreshStage.TCP_TEST,
+                viewModel.progress.value?.stage,
+            )
+            assertEquals(1, emissions.get())
+
+            // 放行 → 连发 50 次进度
+            firstGate.complete(Unit)
+            advanceTimeBy(100)
+
+            assertEquals("进度没有继续推进，下面的断言会变成恒真", 51, emissions.get())
+            assertEquals("进度通道没接上", 51, viewModel.progress.value?.done)
+            // 引用相等 = 期间一次 copy 都没发生（值相等不够，值本来就没变）
+            assertSame(
+                "进度更新复制了 uiState，节点列表/漏斗/耗时卡会被带着重组",
+                snapshot,
+                viewModel.uiState.value,
+            )
+
+            secondGate.complete(Unit)
+            advanceTimeBy(100)
+            assertNull("刷新结束后进度应清空", viewModel.progress.value)
+            assertFalse(viewModel.uiState.value.fetching)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun `刷新失败时进度通道也要清空`() = runTest(testDispatcher) {
+        val gate = CompletableDeferred<Unit>()
+        val tester = object : LatencyTester {
+            override suspend fun testAll(
+                entries: List<ProxyEntry>,
+                onProgress: (Int, Int) -> Unit,
+            ): List<ProxyEntry> {
+                onProgress(1, entries.size)
+                gate.await()
+                throw IOException("tester boom")
+            }
+        }
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, tester, FakeGate(), ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+        )
+        try {
+            advanceTimeBy(100)
+            viewModel.onPause()
+            // 失败前先确认进度确实上报过（否则下面的「清空」断言恒真）
+            assertEquals(
+                RefreshStage.TCP_TEST,
+                viewModel.progress.value?.stage,
+            )
+
+            gate.complete(Unit)
+            advanceTimeBy(100)
+
+            assertNull("异常路径没清空进度，下一轮开始会闪一下旧阶段", viewModel.progress.value)
+            assertFalse(viewModel.uiState.value.fetching)
+            assertTrue(
+                "失败应写进 error：${viewModel.uiState.value.error}",
+                viewModel.uiState.value.error?.contains("tester boom") == true,
+            )
         } finally {
             viewModel.viewModelScope.cancel()
         }
