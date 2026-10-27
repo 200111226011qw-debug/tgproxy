@@ -748,6 +748,10 @@ def main():
     print("tgproxy %s 已启动: %s" % (APP_VERSION, address))
     print("配置文件: %s" % CONFIG_PATH)
     print("按 Ctrl+C 退出。")
+    # windowed 打包（console=False）后 print 全部丢弃，启动地址必须同时进日志，
+    # 否则「浏览器没弹出来」时用户和排查者都无从知道端口
+    logging.getLogger("tgproxy").info("tgproxy %s 已启动: %s", APP_VERSION, address)
+    logging.getLogger("tgproxy").info("配置文件: %s", CONFIG_PATH)
     try:
         webbrowser.open(address)
     except Exception:

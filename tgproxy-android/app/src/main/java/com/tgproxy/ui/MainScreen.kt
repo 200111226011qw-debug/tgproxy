@@ -36,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tgproxy.model.Countdown
 import com.tgproxy.model.ProxyUiState
 import com.tgproxy.model.RefreshProgress
 import com.tgproxy.model.RefreshStage
@@ -44,6 +46,7 @@ import com.tgproxy.model.ThemeMode
 import com.tgproxy.ui.components.ErrorBanner
 import com.tgproxy.ui.components.SettingsSheetContent
 import com.tgproxy.ui.components.formatCountdown
+import com.tgproxy.ui.preview.PreviewCountdown
 import com.tgproxy.ui.preview.PreviewUiState
 import com.tgproxy.ui.screens.DashboardScreen
 import com.tgproxy.ui.screens.LogsScreen
@@ -75,6 +78,7 @@ fun MainScreen(
     uiState: ProxyUiState,
     settings: Settings,
     progressFlow: StateFlow<RefreshProgress?>,
+    countdownFlow: StateFlow<Countdown>,
     onRefresh: () -> Unit,
     onSaveInterval: (String) -> Unit,
     onThemeModeChange: (ThemeMode) -> Unit,
@@ -120,14 +124,12 @@ fun MainScreen(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
-                        Text(
-                            text = if (uiState.fetching) {
-                                "正在刷新…"
-                            } else {
-                                "更新 ${uiState.updatedAt ?: "--"} · ${formatCountdown(uiState.countdownSec)} 后自动更新"
-                            },
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // 倒计时在子组件内部订阅：放在 MainScreen 顶层读的话，
+                        // 每秒一次的新值会把整页（含 pager 与列表）带着重组
+                        TopBarSubtitle(
+                            fetching = uiState.fetching,
+                            updatedAt = uiState.updatedAt,
+                            countdownFlow = countdownFlow,
                         )
                     }
                 },
@@ -195,9 +197,8 @@ fun MainScreen(
                         durations = uiState.durations,
                         lastDurationMs = uiState.lastDurationMs,
                         bestLatencyMs = bestLatencyMs,
-                        countdownSec = uiState.countdownSec,
-                        countdownStarted = uiState.countdownStarted,
                         progressFlow = progressFlow,
+                        countdownFlow = countdownFlow,
                         listState = dashboardListState,
                     )
 
@@ -234,6 +235,31 @@ fun MainScreen(
             )
         }
     }
+}
+
+/**
+ * 顶栏副标题：更新时间 + 距下次自动刷新的倒计时。
+ *
+ * 单独抽出来只为一件事 —— 把 `countdownFlow` 的**读点关在这里**。在 [MainScreen]
+ * 顶层读的话，每秒一次的新值会让整个 Scaffold（含 pager 与 2000 条节点列表）
+ * 跟着重组；关在这里，一秒只重画这一行文字。
+ */
+@Composable
+private fun TopBarSubtitle(
+    fetching: Boolean,
+    updatedAt: String?,
+    countdownFlow: StateFlow<Countdown>,
+) {
+    val countdown by countdownFlow.collectAsStateWithLifecycle()
+    Text(
+        text = if (fetching) {
+            "正在刷新…"
+        } else {
+            "更新 ${updatedAt ?: "--"} · ${formatCountdown(countdown.sec)} 后自动更新"
+        },
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 /**
@@ -296,6 +322,7 @@ private fun MainScreenPreviewLight() {
             uiState = PreviewUiState,
             settings = Settings(),
             progressFlow = remember { MutableStateFlow(null) },
+            countdownFlow = remember { MutableStateFlow(PreviewCountdown) },
             onRefresh = {},
             onSaveInterval = {},
             onThemeModeChange = {},
@@ -312,6 +339,7 @@ private fun MainScreenPreviewDark() {
             uiState = PreviewUiState,
             settings = Settings(themeMode = ThemeMode.DARK),
             progressFlow = remember { MutableStateFlow(null) },
+            countdownFlow = remember { MutableStateFlow(PreviewCountdown) },
             onRefresh = {},
             onSaveInterval = {},
             onThemeModeChange = {},
@@ -331,6 +359,7 @@ private fun MainScreenPreviewError() {
             ),
             settings = Settings(),
             progressFlow = remember { MutableStateFlow(null) },
+            countdownFlow = remember { MutableStateFlow(PreviewCountdown) },
             onRefresh = {},
             onSaveInterval = {},
             onThemeModeChange = {},
@@ -350,6 +379,7 @@ private fun MainScreenPreviewFetching() {
             progressFlow = remember {
                 MutableStateFlow(RefreshProgress(RefreshStage.TG_TEST, 18, 40))
             },
+            countdownFlow = remember { MutableStateFlow(PreviewCountdown) },
             onRefresh = {},
             onSaveInterval = {},
             onThemeModeChange = {},

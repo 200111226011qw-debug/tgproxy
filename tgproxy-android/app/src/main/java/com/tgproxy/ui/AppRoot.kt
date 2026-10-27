@@ -34,6 +34,7 @@ fun AppRoot(viewModel: MainViewModel) {
                 uiState = uiState,
                 settings = settings,
                 progressFlow = viewModel.progress,
+                countdownFlow = viewModel.countdown,
                 onRefresh = { viewModel.refresh() },
                 onSaveInterval = { viewModel.saveIntervalInput(it) },
                 onThemeModeChange = { viewModel.setThemeMode(it) },

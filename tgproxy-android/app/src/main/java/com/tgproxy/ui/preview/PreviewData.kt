@@ -1,5 +1,6 @@
 package com.tgproxy.ui.preview
 
+import com.tgproxy.model.Countdown
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType
@@ -92,6 +93,8 @@ internal val PreviewProxies = listOf(
     ),
 )
 
+internal val PreviewCountdown = Countdown(sec = 605, started = true)
+
 /** 三条轮次记录：成功 / 成功带提示 / 失败，覆盖日志卡片的三种形态。 */
 internal val PreviewLogs = listOf(
     RoundRecord(
@@ -131,7 +134,5 @@ internal val PreviewUiState = ProxyUiState(
     tgStats = PreviewTgStats,
     durations = PreviewDurations,
     proxies = PreviewProxies,
-    countdownSec = 605,
-    countdownStarted = true,
     logs = PreviewLogs,
 )

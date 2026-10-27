@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tgproxy.model.Countdown
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.RefreshProgress
 import com.tgproxy.model.StageDurations
@@ -40,9 +41,8 @@ fun DashboardScreen(
     durations: StageDurations,
     lastDurationMs: Long?,
     bestLatencyMs: Int?,
-    countdownSec: Int,
-    countdownStarted: Boolean,
     progressFlow: StateFlow<RefreshProgress?>,
+    countdownFlow: StateFlow<Countdown>,
     listState: LazyListState,
     modifier: Modifier = Modifier,
 ) {
@@ -55,14 +55,16 @@ fun DashboardScreen(
     ) {
         item {
             val progress by progressFlow.collectAsStateWithLifecycle()
+            // 倒计时同样在 item 内订阅：每秒一次，不能在函数体顶层读
+            val countdown by countdownFlow.collectAsStateWithLifecycle()
             HeroStatusCard(
                 fetching = fetching,
                 progress = progress,
                 lastDurationMs = lastDurationMs,
                 stats = stats,
                 bestLatencyMs = bestLatencyMs,
-                countdownSec = countdownSec,
-                countdownStarted = countdownStarted,
+                countdownSec = countdown.sec,
+                countdownStarted = countdown.started,
             )
         }
         item {

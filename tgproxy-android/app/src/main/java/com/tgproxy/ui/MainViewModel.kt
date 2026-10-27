@@ -8,6 +8,7 @@ import com.tgproxy.data.ProxyRepository
 import com.tgproxy.data.ProxyRepository.RefreshResult
 import com.tgproxy.data.RoundLogger
 import com.tgproxy.data.SettingsStore
+import com.tgproxy.model.Countdown
 import com.tgproxy.model.ProxyUiState
 import com.tgproxy.model.RefreshProgress
 import com.tgproxy.model.RoundRecord
@@ -74,6 +75,15 @@ class MainViewModel(
      */
     private val _progress = MutableStateFlow<RefreshProgress?>(null)
     val progress: StateFlow<RefreshProgress?> = _progress.asStateFlow()
+
+    /**
+     * 倒计时：另一条高频通道（每秒一次）。
+     *
+     * 与 [progress] 同一个道理 —— 放在 uiState 里，每秒都要 `copy()` 一次快照，
+     * 订阅 uiState 的整页跟着重组。拆出来之后只有顶栏副标题和 Hero 卡订阅它。
+     */
+    private val _countdown = MutableStateFlow(Countdown())
+    val countdown: StateFlow<Countdown> = _countdown.asStateFlow()
 
     private val _settings = MutableStateFlow(Settings())
     val settings: StateFlow<Settings> = _settings.asStateFlow()
@@ -325,18 +335,16 @@ class MainViewModel(
             while (isActive) {
                 val remainingNs = deadlineNs - timeSource.nowNanos()
                 if (remainingNs > 0) {
-                    _uiState.value = _uiState.value.copy(
-                        countdownSec = (remainingNs / Constants.NANOS_PER_SEC)
+                    // 只写独立通道：每秒一次，绝不能碰 _uiState
+                    _countdown.value = Countdown(
+                        sec = (remainingNs / Constants.NANOS_PER_SEC)
                             .toInt()
                             .coerceAtLeast(0),
-                        countdownStarted = true,
+                        started = true,
                     )
                     delay(Constants.COUNTDOWN_TICK_MS)
                 } else {
-                    _uiState.value = _uiState.value.copy(
-                        countdownSec = 0,
-                        countdownStarted = true,
-                    )
+                    _countdown.value = Countdown(sec = 0, started = true)
                     // 到期：等待本轮刷新完成（tryLock 被手动刷新占用时立即返回）
                     refreshAwait()
                     deadlineNs = timeSource.nowNanos() + intervalSec * Constants.NANOS_PER_SEC

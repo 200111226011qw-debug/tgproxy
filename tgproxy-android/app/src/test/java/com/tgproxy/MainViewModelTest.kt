@@ -297,8 +297,8 @@ class MainViewModelTest {
             assertFalse(viewModel.uiState.value.settingsMessageIsError)
 
             // 倒计时按新间隔（5 分钟 = 300 秒）重新计时
-            assertEquals(300, viewModel.uiState.value.countdownSec)
-            assertTrue(viewModel.uiState.value.countdownStarted)
+            assertEquals(300, viewModel.countdown.value.sec)
+            assertTrue(viewModel.countdown.value.started)
             viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
         }
 
@@ -366,7 +366,7 @@ class MainViewModelTest {
         advanceTimeBy(100)
 
         assertEquals(Constants.DEFAULT_PROXY_LIST_URLS.size, source.calls.get())
-        assertTrue(viewModel.uiState.value.countdownStarted)
+        assertTrue(viewModel.countdown.value.started)
         viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
     }
 
@@ -548,6 +548,44 @@ class MainViewModelTest {
             assertEquals("2026-10-28 02:00:00", viewModel.uiState.value.logs.last().timestamp)
             gate.complete(Unit)
             advanceTimeBy(200)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun `倒计时每秒跳动不复制 uiState`() = runTest(testDispatcher) {
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        // 倒计时读的是 FakeTimeSource，不随虚拟时间走 —— 必须手动推时钟，
+        // 否则 delay 会按时醒来但剩余秒数一直不变（第一版就是这么写错的，
+        // 被下面的阳性对照当场抓住）
+        val time = FakeTimeSource()
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = time,
+        )
+        try {
+            advanceTimeBy(200) // 跑完一轮，状态稳定
+            val snapshot = viewModel.uiState.value
+            val secBefore = viewModel.countdown.value.sec
+            assertTrue("倒计时应当已经在跑", viewModel.countdown.value.started)
+
+            time.nowNs += 2_000_000_000L // 真实过去 2 秒
+            advanceTimeBy(1_100)         // 让下一次 tick 跑到
+
+            // 阳性对照：必须证明倒计时真的跳了，否则下面的「引用没变」是恒真
+            val secAfter = viewModel.countdown.value.sec
+            assertTrue(
+                "倒计时没有推进（$secBefore -> $secAfter），断言会变成恒真",
+                secAfter < secBefore,
+            )
+            // 引用相等 = 期间一次 copy 都没发生
+            assertSame(
+                "倒计时跳动复制了 uiState，整页（含节点列表）会被带着重组",
+                snapshot,
+                viewModel.uiState.value,
+            )
         } finally {
             viewModel.viewModelScope.cancel()
         }
