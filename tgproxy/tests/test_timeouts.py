@@ -142,7 +142,7 @@ def test_invalid_env_falls_back_to_default():
             {"TGPROXY_TCP_TIMEOUT": bad},
         )
         assert out.returncode == 0, out.stderr
-        assert out.stdout.strip() == "5.0", "非法值 %r 应回落 5.0，实际 %r" % (
+        assert out.stdout.strip() == "2.0", "非法值 %r 应回落 2.0，实际 %r" % (
             bad, out.stdout.strip())
 
 
@@ -154,7 +154,49 @@ def test_defaults_unchanged_without_env():
         {},
     )
     assert out.returncode == 0, out.stderr
-    assert out.stdout.split() == ["15", "5.0", "8.0", "20.0"]
+    assert out.stdout.split() == ["15", "2.0", "8.0", "20.0"]
+
+
+# --------------------------------------------------------------------------
+# 3. 预筛超时从延迟门槛派生（方案 B）
+# --------------------------------------------------------------------------
+
+def test_tcp_timeout_derives_from_latency_limit():
+    """门槛越高，预筛越宽——保证「能过门槛的节点不会在预筛被冤杀」。"""
+    assert pm.tcp_timeout_for(500) == 2.0     # 0.5+1.0=1.5 → 抬到下限 2.0
+    assert pm.tcp_timeout_for(1000) == 2.0    # 1.0+1.0=2.0，正好等于下限
+    assert pm.tcp_timeout_for(5000) == 6.0    # 5.0+1.0
+    assert pm.tcp_timeout_for(60000) == 61.0  # 上限 60s → 61s
+
+
+def test_tcp_timeout_floor_is_not_hardcoded():
+    """下限必须来自 TEST_TIMEOUT_SEC，不能写死 2.0。"""
+    original = pm.TEST_TIMEOUT_SEC
+    try:
+        pm.TEST_TIMEOUT_SEC = 4.0
+        assert pm.tcp_timeout_for(1000) == 4.0   # 派生 2.0 被下限抬到 4.0
+        pm.TEST_TIMEOUT_SEC = 0.5
+        assert pm.tcp_timeout_for(1000) == 2.0   # 派生 2.0 压过下限
+    finally:
+        pm.TEST_TIMEOUT_SEC = original
+
+
+def test_invalid_latency_limit_falls_back():
+    for bad in (None, "abc", 0, -1):
+        assert pm.tcp_timeout_for(bad) == 2.0, "非法门槛 %r 应回落默认" % (bad,)
+
+
+def test_pre_screen_uses_derived_timeout():
+    """集成：门槛 5000ms 时 TCP 预筛必须收到 6.0s，而不是常量默认值。"""
+    recorded = []
+    original = pm.test_tcp_latency
+    pm.test_tcp_latency = lambda h, p, t=None: recorded.append(t) or 12
+    try:
+        manager = pm.ProxyManager(max_tg_latency_ms=5000)
+        manager._test_entries([{"host": "1.2.3.4", "port": 1080}])
+    finally:
+        pm.test_tcp_latency = original
+    assert recorded == [6.0], "预筛没收到派生超时：%r" % (recorded,)
 
 
 if __name__ == "__main__":

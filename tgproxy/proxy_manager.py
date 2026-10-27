@@ -78,7 +78,12 @@ def _env_float(name, default):
 #   TGPROXY_FETCH_TIMEOUT / TGPROXY_TCP_TIMEOUT / TGPROXY_TG_TIMEOUT / TGPROXY_TG_DEADLINE
 FETCH_TIMEOUT_SEC = _env_float("TGPROXY_FETCH_TIMEOUT", 15)
 FETCH_MAX_SOURCES = 20  # 与 app.py 的 MAX_PROXY_LIST_URLS 对齐，用户配的源全部参与抓取与体检
-TEST_TIMEOUT_SEC = _env_float("TGPROXY_TCP_TIMEOUT", 5.0)
+TEST_TIMEOUT_SEC = _env_float("TGPROXY_TCP_TIMEOUT", 2.0)
+# TCP 预筛超时的派生规则（见 tcp_timeout_for）：门槛 + 余量，且不低于 TEST_TIMEOUT_SEC。
+# TEST_TIMEOUT_SEC 是**下限**，调低它不会突破「预筛 ≥ 门槛」的约束——这正是耦合要保证的。
+TCP_TIMEOUT_MARGIN_SEC = 1.0
+# 派生结果超过这个值就告警：说明用户把门槛调得很高，本轮耗时会明显变长
+TCP_TIMEOUT_WARN_SEC = 5.0
 # 免费列表动辄数万条，全量 TCP 测试耗时过久；抽样上限让单轮刷新控制在分钟级
 MAX_PER_SOURCE = 1000
 MAX_TOTAL = 3000
@@ -422,6 +427,30 @@ def fetch_proxy_text(url, timeout=None):
         except Exception as exc:
             last_error = exc
     raise last_error
+
+
+def tcp_timeout_for(max_tg_latency_ms):
+    """TCP 预筛超时从延迟门槛派生，保证「能过门槛的节点不会在预筛被冤杀」。
+
+    依据：`test_socks5_telegram_dc` 里 `started` 在 `create_connection` 之前，
+    所以 `tg_latency` **包含到代理的握手时间**。于是握手时间超过门槛的节点
+    必然过不了门槛；预筛超时必须 ≥ 门槛 + 余量，否则「握手落在
+    [门槛, 预筛超时) 之间」的节点会在预筛阶段被提前淘汰，门槛变得不可达。
+
+    历史问题：预筛超时曾是独立常量（5.0s），而门槛上限是 60s——门槛设到
+    6s 以上的用户一直在被静默误杀，只是没人量过。
+
+    `TEST_TIMEOUT_SEC` 是下限（默认 2.0s，可用 TGPROXY_TCP_TIMEOUT 覆盖），
+    调低它不会突破上述约束。
+    """
+    try:
+        limit = float(max_tg_latency_ms)
+    except (TypeError, ValueError):
+        limit = float(TG_LATENCY_LIMIT_MS)
+    if limit <= 0:
+        limit = float(TG_LATENCY_LIMIT_MS)
+    derived = limit / 1000.0 + TCP_TIMEOUT_MARGIN_SEC
+    return max(TEST_TIMEOUT_SEC, derived)
 
 
 def test_tcp_latency(host, port, timeout=None):
@@ -1178,10 +1207,20 @@ class ProxyManager:
         """并发 TCP 测试全部代理并回填延迟与状态。"""
         if not entries:
             return []
+        # 预筛超时由当前门槛派生：门槛调高时自动放宽，避免把「能过门槛」的
+        # 节点提前淘汰（见 tcp_timeout_for 的说明）。
+        timeout = tcp_timeout_for(self._max_tg_latency_ms)
+        if (timeout > TCP_TIMEOUT_WARN_SEC
+                and timeout != getattr(self, "_warned_tcp_timeout", None)):
+            self._warned_tcp_timeout = timeout
+            logger.warning(
+                "TG 延迟门槛 %sms → TCP 预筛超时 %.1fs，本轮耗时会明显增加",
+                self._max_tg_latency_ms, timeout,
+            )
         results = [None] * len(entries)
         with ThreadPoolExecutor(max_workers=TEST_MAX_WORKERS) as executor:
             futures = {
-                executor.submit(test_tcp_latency, entry["host"], entry["port"]): index
+                executor.submit(test_tcp_latency, entry["host"], entry["port"], timeout): index
                 for index, entry in enumerate(entries)
             }
             for future, index in futures.items():
