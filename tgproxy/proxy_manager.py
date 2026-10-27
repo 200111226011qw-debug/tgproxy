@@ -801,8 +801,9 @@ class ProxyManager:
         self._notice = None
         self._proxies = []
         self._sources = []
-        self._stats = {"available": 0, "unverified": 0, "tg_failed": 0, "dropped": 0,
-                       "excluded": 0, "blacklisted": 0}
+        self._stats = {"available": 0, "unverified": 0, "tg_failed": 0,
+                       "over_threshold": 0, "dropped": 0, "excluded": 0,
+                       "blacklisted": 0, "tested": 0}
         self._updated_at = None
         self._fetching = False
         self._error = None
@@ -930,7 +931,9 @@ class ProxyManager:
                 # 别拿上一轮的数字充数
                 ok, stats_for_log, gates_for_log, stages_for_log = False, {}, {}, {}
             else:
-                over = int(extra.get("over_threshold") or 0)
+                # over_threshold / tested 现在就是 _stats 的字段，日志不再自己算
+                # 一遍 —— 同一个数只有一处来源
+                over = int(stats.get("over_threshold") or 0)
                 stats_for_log = {
                     "available": stats.get("available", 0),
                     "unverified": stats.get("unverified", 0),
@@ -940,7 +943,7 @@ class ProxyManager:
                     "dropped": stats.get("dropped", 0),
                     "excluded": stats.get("excluded", 0),
                     "blacklisted": stats.get("blacklisted", 0),
-                    "tested": int(extra.get("tested") or 0),
+                    "tested": stats.get("tested", 0),
                 }
                 gates_for_log = _gate_counts(gates)
                 stages_for_log = stages
@@ -1087,6 +1090,10 @@ class ProxyManager:
         ]
         # tg_failed 含两关未过与超门槛（「含超慢」口径），保证四项统计之和 = 本轮测试总数
         tg_failed = len(verified) - len(unverified) - len(kept)
+        # 两关通过（tg_ok=True）但延迟超门槛 → 没进 kept 的那部分。
+        # 与安卓 Stats.overThreshold 同义；单独列出来之后，tg_failed 里
+        # 「两关未过」与「超门槛」就不再混在一个数里（见下面的口径说明）。
+        over_threshold = len(verified_ok) - len(kept)
         # 逐源健康度：每个源本轮贡献的 TG 验证通过数（按合并时首次归属）
         per_src_verified = {}
         for item in verified:
@@ -1113,10 +1120,17 @@ class ProxyManager:
             self._stats = {
                 "available": len(kept),
                 "unverified": len(unverified),
+                # ⚠ 历史口径：含超门槛。拆出来之后恒等式为
+                #   available + unverified + tg_failed + dropped == tested
+                # 若要「两关未过（不含超门槛）」，用 tg_failed - over_threshold，
+                # 与安卓 Stats.tgFailed / rounds.jsonl 的 stats.tg_failed 同义。
                 "tg_failed": tg_failed,
+                "over_threshold": over_threshold,
                 "dropped": len(tested) - len(tcp_ok),
                 "excluded": excluded_total + dropped_total,
                 "blacklisted": len(blacklisted_keys),
+                # 本轮 TCP 实测的节点数（= available + unverified + tg_failed + dropped）
+                "tested": len(tested),
             }
             self._updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._notice = notice
@@ -1150,14 +1164,9 @@ class ProxyManager:
         stages["total"] = time.perf_counter() - round_started
         with self._lock:
             self._stage_durations = {k: round(v, 3) for k, v in stages.items()}
-        # 供轮次记录用的派生量。不塞进 _stats：_stats 是 /api/proxies 的公开字段，
-        # 改它的口径会牵动 Web UI 的既有算式（见 round_log 模块注释）。
-        return {
-            "fetch_failed_all": bool(failures) and len(failures) == len(urls),
-            "tested": len(tested),
-            # 两关通过（tg_ok=True）但延迟超门槛 → 没进 kept 的那部分
-            "over_threshold": len(verified_ok) - len(kept),
-        }
+        # 供轮次记录用的派生量。over_threshold / tested 已进 _stats（公开字段），
+        # 这里只额外带一个「是否全源抓取失败」——它不是统计量，不该塞进 _stats。
+        return {"fetch_failed_all": bool(failures) and len(failures) == len(urls)}
 
     def _load_known_good(self):
         """读取上轮验证通过的节点（known_good.json；缺失/损坏返回空表）。"""

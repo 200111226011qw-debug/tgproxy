@@ -8,16 +8,19 @@
 
 ## 与 /api/proxies 的口径差异（**重要，别搞混**）
 
-日志里的 `stats.tg_failed` 是「**两关失败，不含超门槛**」，与安卓端
-`Stats.tgFailed` 同义；而 `/api/proxies` 返回的 `stats.tg_failed` 是
-「**两关未过 + 超门槛**」（历史口径，界面按它算「四项之和 = 本轮测试数」）。
+两边的字段集合已经一致（8 个），但 **`tg_failed` 同名不同义**：
 
-同一个名字两种口径确实别扭，但改 API 口径会牵动 Web UI 的既有算式。所以这里
-只让**日志**向安卓端对齐，API 保持不动。日志侧用下面这条恒等式自证：
+- **日志** `stats.tg_failed`：两关失败，**不含**超门槛 —— 与安卓 `Stats.tgFailed` 同义
+- **`/api/proxies`** `stats.tg_failed`：两关失败 **+** 超门槛 —— 历史口径，
+  Web UI 按它算「四项之和 = 本轮测试数」，没动
 
-    available + unverified + tg_failed + over_threshold + dropped == tested
+`over_threshold` / `tested` 是后来补进 API 的（纯增量），所以日志侧现在直接取这两个
+字段，不再自己算。两条恒等式分别锁住两边的口径：
 
-（`over_threshold` 是「两关过了但延迟超门槛」，`dropped` 是 TCP 预筛不通。）
+    API  ：available + unverified + tg_failed              + dropped == tested
+    日志 ：available + unverified + tg_failed + over_threshold + dropped == tested
+
+两式相减即得 `API.tg_failed == 日志.tg_failed + over_threshold`。
 """
 
 import json

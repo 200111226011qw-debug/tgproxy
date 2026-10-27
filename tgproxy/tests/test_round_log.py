@@ -230,6 +230,32 @@ def test_exception_round_is_recorded_without_stats():
     assert rec["durations"]["total_ms"] == 0
 
 
+def test_api_stats_has_eight_fields_aligned_with_android():
+    """`/api/proxies` 的 stats 必须与安卓 Stats 同名同数（8 个字段）。
+
+    这是「双端数据契约」的对外承诺，字段少一个就是没对齐 —— 之前只对齐了日志层，
+    API 层少 `over_threshold` / `tested`，导致同一句「已对齐」站不住。
+    """
+    path = _tmp_path()
+    manager = pm.ProxyManager(rounds_path=path)
+    with _Patched():
+        manager.refresh()
+
+    stats = manager.get_state()["stats"]
+    assert set(stats) == {
+        "available", "unverified", "tg_failed", "over_threshold",
+        "dropped", "excluded", "blacklisted", "tested",
+    }
+    # API 口径的恒等式（tg_failed 含超门槛）
+    assert (stats["available"] + stats["unverified"] + stats["tg_failed"]
+            + stats["dropped"]) == stats["tested"]
+    # 同一轮的两条恒等式必须互相自洽
+    rec = round_log.load_rounds(path)[-1]
+    assert stats["tested"] == rec["stats"]["tested"]
+    assert stats["over_threshold"] == rec["stats"]["over_threshold"]
+    assert stats["tg_failed"] == rec["stats"]["tg_failed"] + stats["over_threshold"]
+
+
 def test_state_exposes_recent_rounds():
     path = _tmp_path()
     manager = pm.ProxyManager(rounds_path=path)
