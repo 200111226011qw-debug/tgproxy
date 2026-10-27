@@ -12,6 +12,7 @@ import java.io.OutputStream
 import java.net.Socket
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -42,8 +43,7 @@ class TelegramGateTest {
         }
     }
 
-    /** 每次读取自动前进 [stepMs] 的时钟：让同步假调用也产生耗时。 */
-    private fun advancingClock(stepMs: Long): () -> Long {
+    /** 每次读取自动前进 [stepMs] 的时钟：让同步假调用也产生耗时。 */    private fun advancingClock(stepMs: Long): () -> Long {
         var nowNs = 1_000_000L
         return {
             val value = nowNs
@@ -216,5 +216,75 @@ class TelegramGateTest {
         // 第一关 50ms + deadline 1000ms → 剩余 950ms ≤ 1000ms 门槛 → 放弃第二关
         assertNull(gate.test("1.2.3.4", 1080, 8_000, 1_000))
         assertEquals(0, tlsCalls)
+    }
+
+    // ========================================================================
+    // 剪枝（2026-10-28）：dcMs 超门槛时跳过第二关
+    // ========================================================================
+
+    @Test
+    fun `剪枝判定边界：等于门槛不剪、超过才剪、不传门槛不剪`() {
+        assertFalse(TelegramGate.shouldPrune(1_000, 1_000))   // 等于门槛 → 保留
+        assertTrue(TelegramGate.shouldPrune(1_001, 1_000))
+        assertTrue(TelegramGate.shouldPrune(60_000, 1_000))
+        assertFalse(TelegramGate.shouldPrune(5_000, null))     // 不传门槛 → 旧行为
+        assertFalse(TelegramGate.shouldPrune(0, 1_000))
+    }
+
+    @Test
+    fun `第一关超门槛时跳过第二关并返回 dcMs`() {
+        var tlsCalls = 0
+        val gate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> FakeSocket(okScript()) },
+            tlsWrapper = TlsWrapper { _, _, _ ->
+                tlsCalls++
+                throw IOException("剪枝后不该走到第二关")
+            },
+            // 每次读时钟 +1500ms：第一关往返必然远超 100ms 门槛
+            clock = advancingClock(stepMs = 1_500),
+        )
+
+        val result = gate.test("1.2.3.4", 1080, maxLatencyMs = 100)
+
+        // 返回 dcMs 而不是 null：上层据此归入「超门槛」，不误增连败
+        assertNotNull(result)
+        assertTrue(result!! > 100)
+        assertEquals("剪枝后不该调用第二关", 0, tlsCalls)
+    }
+
+    @Test
+    fun `第一关未超门槛时正常跑第二关`() {
+        var tlsCalls = 0
+        val gate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> FakeSocket(okScript()) },
+            tlsWrapper = TlsWrapper { _, _, _ ->
+                tlsCalls++
+                FakeTlsChannel("HTTP/1.1 200 OK\r\n")
+            },
+            clock = advancingClock(stepMs = 1),
+        )
+
+        val result = gate.test("1.2.3.4", 1080, maxLatencyMs = 60_000)
+
+        assertNotNull(result)
+        assertEquals("未超门槛必须继续跑第二关", 1, tlsCalls)
+    }
+
+    @Test
+    fun `不传门槛时保持旧行为（始终跑第二关）`() {
+        var tlsCalls = 0
+        val gate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> FakeSocket(okScript()) },
+            tlsWrapper = TlsWrapper { _, _, _ ->
+                tlsCalls++
+                FakeTlsChannel("HTTP/1.1 200 OK\r\n")
+            },
+            clock = advancingClock(stepMs = 1_500),   // 第一关很慢
+        )
+
+        val result = gate.test("1.2.3.4", 1080)      // 不传 maxLatencyMs
+
+        assertNotNull(result)
+        assertEquals("不传门槛不该剪枝", 1, tlsCalls)
     }
 }

@@ -40,11 +40,23 @@ interface TlsChannel {
  */
 fun interface TelegramGateCaller {
     fun test(host: String, port: Int): Int?
+
+    /**
+     * 带延迟门槛的入口（剪枝用）。
+     *
+     * 默认实现忽略门槛、退化为 [test]，这样既有测试假件不用改；但**生产实现
+     * 必须覆写**，否则剪枝不生效（[DefaultTelegramGateCaller] 已覆写）。
+     */
+    fun test(host: String, port: Int, maxLatencyMs: Int?): Int? = test(host, port)
 }
 
 /** 生产实现：共享无状态 [TelegramGate]（Socket 独立创建，线程安全）。 */
-val DefaultTelegramGateCaller: TelegramGateCaller = TelegramGateCaller { host, port ->
-    SharedTelegramGate.test(host, port)
+val DefaultTelegramGateCaller: TelegramGateCaller = object : TelegramGateCaller {
+    override fun test(host: String, port: Int): Int? =
+        SharedTelegramGate.test(host, port)
+
+    override fun test(host: String, port: Int, maxLatencyMs: Int?): Int? =
+        SharedTelegramGate.test(host, port, maxLatencyMs = maxLatencyMs)
 }
 
 private val SharedTelegramGate = TelegramGate()
@@ -74,6 +86,7 @@ class TelegramGate(
      *
      * @param timeoutMs 单关预算
      * @param deadlineMs 单节点两关总预算
+     * @param maxLatencyMs 延迟门槛；传入时启用剪枝（见 [shouldPrune]）
      * @return 第一关（经代理到 TG 数据中心）的往返毫秒；任一关失败为 null
      */
     fun test(
@@ -81,6 +94,7 @@ class TelegramGate(
         port: Int,
         timeoutMs: Int = Constants.TG_TEST_TIMEOUT_MS,
         deadlineMs: Int = Constants.TG_TEST_DEADLINE_MS,
+        maxLatencyMs: Int? = null,
     ): Int? {
         // 桌面版：stage = max(1.0, min(timeout, deadline))
         val stageMs = maxOf(1, minOf(timeoutMs, deadlineMs))
@@ -88,6 +102,10 @@ class TelegramGate(
         val dcMs = testSocks5TelegramDc(host, port, stageMs,
             Constants.TELEGRAM_DC_HOST, Constants.TELEGRAM_DC_PORT)
         if (dcMs == null) return null
+        // 剪枝：dcMs 就是最终的 tg_latency，超门槛的节点必然被剔除，第二关
+        // （TLS+HTTP）不必再跑。返回 dcMs 而不是 null —— 让上层归入「超门槛」
+        // 而不是「连接失败」，否则会误增连败、三轮后被拉黑。
+        if (shouldPrune(dcMs, maxLatencyMs)) return dcMs
         val remainingMs = deadlineMs - elapsedMs(started)
         if (remainingMs <= MIN_REMAINING_MS) return null
         val webOk = testTelegramWebViaSocks5(
@@ -296,6 +314,19 @@ class TelegramGate(
     companion object {
         /** 第二关启动所需最小剩余预算（桌面版 remaining <= 1.0 秒即放弃）。 */
         const val MIN_REMAINING_MS = 1_000
+
+        /**
+         * 是否应当剪掉第二关。
+         *
+         * 依据：第一关的往返（dcMs）就是最终的 `tg_latency`，门槛比较的就是它。
+         * 所以 dcMs 一旦超过门槛，无论第二关结果如何，这个节点都会被剔除 ——
+         * 跑第二关纯属给注定淘汰的节点做无用功。
+         *
+         * 边界用 `>` 而不是 `>=`：门槛判定是 `tg_latency <= 门槛` 即保留，
+         * 所以 dcMs == 门槛 时仍要跑第二关。
+         */
+        fun shouldPrune(dcMs: Int, maxLatencyMs: Int?): Boolean =
+            maxLatencyMs != null && dcMs > maxLatencyMs
     }
 }
 

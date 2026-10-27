@@ -259,7 +259,9 @@ class ProxyRepository(
                         async {
                             semaphore.withPermit {
                                 val latency = try {
-                                    tgGate.test(entry.host, entry.port)
+                                    // 传入门槛以启用剪枝：dcMs 超门槛的节点直接返回
+                                    // dcMs（归入 overThreshold），不跑第二关
+                                    tgGate.test(entry.host, entry.port, tgLatencyLimitMs)
                                 } catch (e: Exception) {
                                     null
                                 }

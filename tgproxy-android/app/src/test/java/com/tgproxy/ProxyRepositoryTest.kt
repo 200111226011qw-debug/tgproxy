@@ -265,6 +265,39 @@ class ProxyRepositoryTest {
         override suspend fun fetch(url: String): String = texts[url] ?: ""
     }
 
+    /** 记录收到的门槛参数：验证仓库确实把门槛传给了闸门（否则剪枝不生效）。 */
+    private class RecordingGate(private val result: Int?) : TelegramGateCaller {
+        val thresholds = mutableListOf<Int?>()
+
+        override fun test(host: String, port: Int): Int? = test(host, port, null)
+
+        override fun test(host: String, port: Int, maxLatencyMs: Int?): Int? {
+            thresholds += maxLatencyMs
+            return result
+        }
+    }
+
+    @Test
+    fun `TG 阶段把延迟门槛传给闸门以启用剪枝`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+            val gate = RecordingGate(500)
+            val repository = ProxyRepository(
+                source, AllPassTester(), gate,
+                tgLatencyLimitMs = 1234, ioDispatcher = td,
+            )
+
+            repository.refresh("https://example.com/proxy.txt")
+
+            assertTrue("闸门没被调用", gate.thresholds.isNotEmpty())
+            assertTrue(
+                "门槛没传进去：${gate.thresholds}",
+                gate.thresholds.all { it == 1234 },
+            )
+        }
+    }
+
     @Test
     fun `黑名单节点不占 MAX_TOTAL 配额（先过滤后抽样）`() {
         // 回归（2026-10-28）：此前是「先抽样、后过滤」，黑名单节点会占掉
