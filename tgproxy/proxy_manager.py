@@ -658,6 +658,9 @@ class ProxyManager:
         self._updated_at = None
         self._fetching = False
         self._error = None
+        # 上一轮的分阶段耗时（秒）：fetch / prepare / tcp / tg / commit / total。
+        # 纯度量，不参与任何判定；P2（流水线化）要不要做，取决于 tcp 与 tg 的占比。
+        self._stage_durations = {}
         self._load_known_bad()
 
     def set_proxy_list_urls(self, urls):
@@ -704,6 +707,7 @@ class ProxyManager:
                 "error": self._error,
                 "notice": self._notice,
                 "stats": dict(self._stats),
+                "stage_durations": dict(self._stage_durations),
                 "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
             }
@@ -744,10 +748,16 @@ class ProxyManager:
                 "via_mirror": via_mirror, "error": None, "text": text}
 
     def _run_refresh(self):
+        round_started = time.perf_counter()
+        stages = {}
+
         urls = list(self._proxy_list_urls)[:FETCH_MAX_SOURCES]
         sources = []
+        t_stage = time.perf_counter()
         with ThreadPoolExecutor(max_workers=max(1, len(urls))) as executor:
             fetched = list(executor.map(self._fetch_one, urls))
+        stages["fetch"] = time.perf_counter() - t_stage
+        t_stage = time.perf_counter()
 
         merged = []
         seen = set()
@@ -815,7 +825,10 @@ class ProxyManager:
             keep_n = max(0, MAX_TOTAL - len(preferred) - len(floor_entries))
             merged = preferred + floor_entries \
                 + random.sample(pool, min(len(pool), keep_n))
+        stages["prepare"] = time.perf_counter() - t_stage
+        t_stage = time.perf_counter()
         tested = self._test_entries(merged)
+        stages["tcp"] = time.perf_counter() - t_stage
         # 第一阶段：TCP 通的才进入第二阶段
         tcp_ok = [item for item in tested if item["status"] == "available"]
         # TCP 预筛不通 -> 连败 +1（通过的留到 TG 阶段按两关结论计）
@@ -823,7 +836,9 @@ class ProxyManager:
             if item["status"] != "available":
                 self._record_bad_fail(item["host"], item["port"])
         # 第二阶段：TG 实测（DC -> 站点串行两关）
+        t_stage = time.perf_counter()
         verified = self._test_telegram_entries(tcp_ok)
+        stages["tg"] = time.perf_counter() - t_stage
         # TG 结论沉淀连败计数：两关通过（含超门槛）清零，未过 +1；MTProto 未验证不计
         for item in verified:
             if item["tg_ok"] is True:
@@ -851,6 +866,7 @@ class ProxyManager:
                     continue
                 per_src_verified[src_url] = per_src_verified.get(src_url, 0) + 1
         notice = self._update_source_health(sources, per_src_verified)
+        t_stage = time.perf_counter()
         with self._lock:
             previous = self._proxies
             if kept:
@@ -896,6 +912,11 @@ class ProxyManager:
             self._save_known_good(kept)
         # 连败计数落盘（锁外；每轮一次，先清理过期/超量）
         self._save_known_bad()
+
+        stages["commit"] = time.perf_counter() - t_stage
+        stages["total"] = time.perf_counter() - round_started
+        with self._lock:
+            self._stage_durations = {k: round(v, 3) for k, v in stages.items()}
 
     def _load_known_good(self):
         """读取上轮验证通过的节点（known_good.json；缺失/损坏返回空表）。"""
