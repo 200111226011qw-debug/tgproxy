@@ -100,13 +100,17 @@ class ProxyRepository(
         // known_good 优先补入（不在池子里也补），并返回优先保留键集
         val preferredKeys = mergeKnownGood(merged, seenKept)
 
-        // 全局抽样至 MAX_TOTAL：preferred 优先保留，其余随机
-        val sampledTotal = samplePreferred(merged, preferredKeys, Constants.MAX_TOTAL)
-
         // 连续失败拉黑跳过：黑名单节点不参与本轮测试（48 小时后自动解封重测）
+        // 顺序必须与桌面版一致：**先过滤、后抽样**。反过来的话黑名单节点会占掉
+        // MAX_TOTAL 配额，实测数随黑名单大小漂移（缺失还非随机），双端通过率
+        // 不可比——门槛「通过率下降 ≤1%」会失去参照。
         knownBad.load()
-        val toTest = sampledTotal.filter { !knownBad.isBlacklisted(it.host, it.port) }
-        val blacklisted = sampledTotal.size - toTest.size
+        val eligible = merged.filter { !knownBad.isBlacklisted(it.host, it.port) }
+        // 全池口径（抽样前）：本轮候选池里被拉黑且跳过的节点数
+        val blacklisted = merged.size - eligible.size
+
+        // 全局抽样至 MAX_TOTAL：preferred 优先保留，其余随机
+        val toTest = samplePreferred(eligible, preferredKeys, Constants.MAX_TOTAL)
 
         // 第一阶段：TCP 预筛（并发）
         val tested = tester.testAll(toTest) { done, total ->

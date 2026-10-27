@@ -1,5 +1,6 @@
 package com.tgproxy.data
 
+import com.tgproxy.Constants
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType
@@ -47,8 +48,14 @@ class KnownGoodStore(private val file: File?) {
     /** 沉淀本轮验证通过的节点；开关关闭不写。任何写失败静默（下轮再试）。 */
     fun save(entries: List<ProxyEntry>) {
         if (!enabled || file == null || entries.isEmpty()) return
+        // 与桌面版对齐：先按 TG 延迟升序、再截断到 KNOWN_GOOD_MAX_ENTRIES。
+        // 只截断不排序的话，保留哪 200 条是不确定的——顺序决定保留谁。
+        // 延迟为 null 的排最后（等价桌面版 1 << 30 的兜底）。
+        val kept = entries
+            .sortedBy { it.latencyMs ?: Int.MAX_VALUE }
+            .take(Constants.KNOWN_GOOD_MAX_ENTRIES)
         val array = JSONArray()
-        for (entry in entries) {
+        for (entry in kept) {
             array.put(entryToJson(entry))
         }
         try {

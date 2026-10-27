@@ -84,6 +84,19 @@ object Constants {
     /** 拉黑表容量上限（超量按最久未失败淘汰，防无限膨胀） */
     const val KNOWN_BAD_MAX_ENTRIES = 10_000
 
+    // ============================================================================
+    // known_good 沉淀容量（与桌面版 known_good.json 对齐）
+    // ============================================================================
+
+    /**
+     * 沉淀表容量上限：超量时按 TG 延迟升序保留最快的 200 条。
+     *
+     * 桌面版 `_save_known_good` 是「先按 tg_latency_ms 升序、再 records[:200]」，
+     * 安卓此前整表覆盖且无排序——沉淀会无限增长，并在抽样时挤占新候选的配额
+     * （`samplePreferred` 的 `limit - keep.size` 趋 0）。
+     */
+    const val KNOWN_GOOD_MAX_ENTRIES = 200
+
     /** 自动更新间隔默认值（分钟） */
     const val DEFAULT_INTERVAL_MINUTES = 10
 

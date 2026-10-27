@@ -260,6 +260,49 @@ class ProxyRepositoryTest {
         }
     }
 
+    /** 按 URL 返回不同文本的假数据源（多源池子用）。 */
+    private class PerUrlSource(private val texts: Map<String, String>) : ProxySource {
+        override suspend fun fetch(url: String): String = texts[url] ?: ""
+    }
+
+    @Test
+    fun `黑名单节点不占 MAX_TOTAL 配额（先过滤后抽样）`() {
+        // 回归（2026-10-28）：此前是「先抽样、后过滤」，黑名单节点会占掉
+        // MAX_TOTAL 配额 → 实测数随黑名单大小漂移且缺失非随机，双端通过率
+        // 不可比。改为「先过滤、后抽样」后，测数恒为 min(合格池, MAX_TOTAL)。
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            // 4 个源各 1000 条（MAX_PER_SOURCE=1000）→ 池子 4000 > MAX_TOTAL 3000
+            val urls = (1..4).map { "https://s$it.example.com/list.txt" }
+            val texts = urls.indices.map { idx ->
+                (0 until 1000).joinToString("\n") { i ->
+                    "socks5://10.$idx.${i / 256}.${i % 256}:1080"
+                }
+            }
+            val source = PerUrlSource(urls.zip(texts).toMap())
+
+            // 把第 1 个源的 500 条打成拉黑（连败 3 次）
+            val bad = com.tgproxy.data.KnownBadStore(badFile("kb-quota"))
+            for (i in 0 until 500) {
+                val host = "10.0.${i / 256}.${i % 256}"
+                repeat(3) { bad.recordFailure(host, 1080) }
+            }
+            bad.persist()
+
+            val tester = CountingTester()
+            val repository = ProxyRepository(
+                source, tester, SelectiveGate(), knownBad = bad, ioDispatcher = td,
+            )
+            val result = repository.refresh(urls)
+
+            assertTrue(result is RefreshResult.Success)
+            result as RefreshResult.Success
+            assertEquals(500, result.stats.blacklisted)  // 全池口径（抽样前）
+            assertEquals(Constants.MAX_TOTAL, result.stats.tested)  // 配额没被吃掉
+            assertEquals(Constants.MAX_TOTAL, tester.fedCount)
+        }
+    }
+
     private fun badFile(name: String): File {
         val dir = File.createTempFile(name, "").let {
             it.delete()

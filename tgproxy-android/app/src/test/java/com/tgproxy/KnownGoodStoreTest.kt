@@ -116,4 +116,25 @@ class KnownGoodStoreTest {
         KnownGoodStore(file).save(emptyList())
         assertFalse(file.exists())
     }
+
+    @Test
+    fun `超量时按延迟升序保留最快的 200 条`() {
+        // 回归（2026-10-28）：此前整表覆盖、无上限、无排序 —— 沉淀会无限增长，
+        // 并在抽样时挤占新候选配额（samplePreferred 的 limit - keep.size 趋 0）。
+        // 桌面版是「先按 tg_latency_ms 升序、再 records[:200]」，顺序决定保留谁。
+        val file = tempFile()
+        val store = KnownGoodStore(file)
+        val entries = (0 until 300).map { i ->
+            val host = "10.0.%d.%d".format(i / 256, i % 256)
+            entry(host).copy(latencyMs = 1000 - i)   // i 越大延迟越小
+        }
+
+        store.save(entries)
+
+        val loaded = store.load()
+        assertEquals(Constants.KNOWN_GOOD_MAX_ENTRIES, loaded.size)
+        val hosts = loaded.map { it.host }.toSet()
+        assertTrue("最快的必须保留（i=299）", "10.0.1.43" in hosts)
+        assertFalse("最慢的必须被截掉（i=0）", "10.0.0.0" in hosts)
+    }
 }
