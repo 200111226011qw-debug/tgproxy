@@ -27,6 +27,9 @@ import com.tgproxy.model.StageDurations
 import com.tgproxy.model.Stats
 import com.tgproxy.model.TgGateStats
 import com.tgproxy.model.ThemeMode
+import com.tgproxy.ui.preview.PreviewDurations
+import com.tgproxy.ui.preview.PreviewStats
+import com.tgproxy.ui.preview.PreviewTgStats
 import com.tgproxy.ui.theme.TgProxyTheme
 
 /**
@@ -286,32 +289,6 @@ private fun dashboardAccents(): DashboardAccents {
 // 用来在 Android Studio 里检查折行、间距、深浅色对比，不参与任何运行逻辑。
 // ---------------------------------------------------------------------------
 
-private val PreviewStats = Stats(
-    available = 11,
-    unverified = 0,
-    tgFailed = 260,
-    overThreshold = 75,
-    dropped = 1200,
-    excluded = 0,
-    blacklisted = 40,
-    tested = 1546,
-)
-
-private val PreviewTgStats = TgGateStats(
-    dcFail = 1200,
-    latencyRejected = 75,
-    webFail = 260,
-    ok = 11,
-)
-
-private val PreviewDurations = StageDurations(
-    fetchMs = 16_600,
-    prepareMs = 900,
-    tcpMs = 8_400,
-    tgMs = 27_600,
-    commitMs = 200,
-    totalMs = 53_700,
-)
 
 /**
  * 与 MainScreen 一致的组合方式：外层 16dp 水平内边距（等价 `contentPadding`），

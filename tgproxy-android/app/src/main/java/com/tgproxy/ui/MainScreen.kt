@@ -34,38 +34,53 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.tgproxy.model.ProxyUiState
+import com.tgproxy.model.RefreshProgress
+import com.tgproxy.model.RefreshStage
+import com.tgproxy.model.Settings
 import com.tgproxy.model.ThemeMode
 import com.tgproxy.ui.components.ErrorBanner
 import com.tgproxy.ui.components.SettingsSheetContent
 import com.tgproxy.ui.components.formatCountdown
+import com.tgproxy.ui.preview.PreviewUiState
 import com.tgproxy.ui.screens.DashboardScreen
 import com.tgproxy.ui.screens.LogsScreen
 import com.tgproxy.ui.screens.NodesScreen
 import com.tgproxy.ui.screens.bestLatencyOf
+import com.tgproxy.ui.theme.TgProxyTheme
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
  * 主屏幕外壳：顶栏 + 三页签 + 悬浮刷新按钮 + 设置弹层。
  *
- * 结构：
- * - [TopAppBar] 标题 / 更新时间与倒计时 / 设置入口
- * - 内容区上沿的错误条（跨页签常驻：抓取失败时不管在哪个页签都该看得见）
- * - [HorizontalPager] 承载 [DashboardScreen] / [NodesScreen] / [LogsScreen]
- * - [PrimaryTabRow] 底部页签，点击走 `animateScrollToPage`（与滑动共用同一状态）
- * - 悬浮刷新按钮：刷新中转灰并显示转圈，点击不再触发（互斥本来就由 ViewModel 保证，
- *   这里只是别让用户以为点了没反应）
+ * **不持有 ViewModel**：状态由参数进来，动作由回调出去（State Hoisting）。
+ * 好处不只是「符合规范」——`@Preview` 里造不出 ViewModel，参数化之后整套
+ * 骨架能在 Android Studio 里直接渲染，布局调整不必再靠 dp 推算。
+ * 桥接在 [AppRoot]。
  *
- * 页签状态只由 `pagerState` 一处持有 —— 它是 `rememberSaveable` 支撑的，
- * 进程被回收后能回到原页。不要再另开一个 `rememberSaveable { selectedTab }`：
- * 那样会有两个真相源，其中一个永远没人写。
+ * @param progressFlow 刷新进度流。**必须传流，不能传值**：进度每测一个节点
+ *   变一次，若在 [AppRoot] 里收集成值再传下来，AppRoot 会逐次重组，把
+ *   `LazyColumn` 的 content lambda 也带着重跑 —— 那正是上一个提交消掉的东西。
+ *   传流之后读点钉在 Hero 那个 `item {}` 内部，只有那张卡重组。
+ * @param onThemeModeChange 主题改为指定值（循环规则留在本文件，属于「点一下
+ *   发生什么」的 UI 语义；持久化才是 ViewModel 的事）
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val settings by viewModel.settings.collectAsStateWithLifecycle()
+fun MainScreen(
+    uiState: ProxyUiState,
+    settings: Settings,
+    progressFlow: StateFlow<RefreshProgress?>,
+    onRefresh: () -> Unit,
+    onSaveInterval: (String) -> Unit,
+    onThemeModeChange: (ThemeMode) -> Unit,
+    onKnownGoodChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -151,10 +166,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             }
         },
         floatingActionButton = {
-            RefreshFab(
-                fetching = uiState.fetching,
-                onRefresh = { viewModel.refresh() },
-            )
+            RefreshFab(fetching = uiState.fetching, onRefresh = onRefresh)
         },
     ) { innerPadding ->
         Column(
@@ -184,7 +196,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         bestLatencyMs = bestLatencyMs,
                         countdownSec = uiState.countdownSec,
                         countdownStarted = uiState.countdownStarted,
-                        progressFlow = viewModel.progress,
+                        progressFlow = progressFlow,
                         listState = dashboardListState,
                     )
 
@@ -192,7 +204,7 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                         proxies = uiState.proxies,
                         stats = uiState.stats,
                         fetching = uiState.fetching,
-                        onRefresh = { viewModel.refresh() },
+                        onRefresh = onRefresh,
                         onMessage = showMessage,
                         listState = nodesListState,
                     )
@@ -210,9 +222,9 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 settings = settings,
                 intervalText = intervalText,
                 onIntervalTextChange = { intervalText = it },
-                onSaveInterval = { viewModel.saveIntervalInput(intervalText) },
-                onKnownGoodChange = { viewModel.setKnownGoodEnabled(it) },
-                onThemeModeClick = { viewModel.setThemeMode(nextThemeMode(settings.themeMode)) },
+                onSaveInterval = { onSaveInterval(intervalText) },
+                onKnownGoodChange = onKnownGoodChange,
+                onThemeModeClick = { onThemeModeChange(nextThemeMode(settings.themeMode)) },
                 settingsMessage = uiState.settingsMessage,
                 settingsMessageIsError = uiState.settingsMessageIsError,
             )
@@ -263,4 +275,81 @@ internal fun nextThemeMode(mode: ThemeMode): ThemeMode = when (mode) {
     ThemeMode.SYSTEM -> ThemeMode.LIGHT
     ThemeMode.LIGHT -> ThemeMode.DARK
     ThemeMode.DARK -> ThemeMode.SYSTEM
+}
+
+// ---------------------------------------------------------------------------
+// 预览
+//
+// 参数提升之后这些才写得出来 —— 之前 MainScreen 要一个 MainViewModel，
+// @Preview 里造不出来，整套骨架只能靠装 APK 看。
+// ---------------------------------------------------------------------------
+
+@Preview(name = "主界面 · 浅色", showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+private fun MainScreenPreviewLight() {
+    TgProxyTheme(themeMode = ThemeMode.LIGHT) {
+        MainScreen(
+            uiState = PreviewUiState,
+            settings = Settings(),
+            progressFlow = remember { MutableStateFlow(null) },
+            onRefresh = {},
+            onSaveInterval = {},
+            onThemeModeChange = {},
+            onKnownGoodChange = {},
+        )
+    }
+}
+
+@Preview(name = "主界面 · 深色", showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+private fun MainScreenPreviewDark() {
+    TgProxyTheme(themeMode = ThemeMode.DARK) {
+        MainScreen(
+            uiState = PreviewUiState,
+            settings = Settings(themeMode = ThemeMode.DARK),
+            progressFlow = remember { MutableStateFlow(null) },
+            onRefresh = {},
+            onSaveInterval = {},
+            onThemeModeChange = {},
+            onKnownGoodChange = {},
+        )
+    }
+}
+
+/** 错误条：验证它占位时会不会把 pager 挤歪、不出现时会不会留白。 */
+@Preview(name = "主界面 · 有错误条", showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+private fun MainScreenPreviewError() {
+    TgProxyTheme(themeMode = ThemeMode.LIGHT) {
+        MainScreen(
+            uiState = PreviewUiState.copy(
+                error = "抓取代理列表失败：全部 8 个数据源抓取失败",
+            ),
+            settings = Settings(),
+            progressFlow = remember { MutableStateFlow(null) },
+            onRefresh = {},
+            onSaveInterval = {},
+            onThemeModeChange = {},
+            onKnownGoodChange = {},
+        )
+    }
+}
+
+/** 刷新中：FAB 置灰转圈 + Hero 卡显示阶段与 done/total。 */
+@Preview(name = "主界面 · 正在刷新", showBackground = true, widthDp = 411, heightDp = 891)
+@Composable
+private fun MainScreenPreviewFetching() {
+    TgProxyTheme(themeMode = ThemeMode.LIGHT) {
+        MainScreen(
+            uiState = PreviewUiState.copy(fetching = true, updatedAt = null),
+            settings = Settings(),
+            progressFlow = remember {
+                MutableStateFlow(RefreshProgress(RefreshStage.TG_TEST, 18, 40))
+            },
+            onRefresh = {},
+            onSaveInterval = {},
+            onThemeModeChange = {},
+            onKnownGoodChange = {},
+        )
+    }
 }
