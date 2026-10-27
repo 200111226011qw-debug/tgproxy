@@ -596,16 +596,25 @@ def test_telegram_web_via_socks5(host, port, timeout=None,
             pass
 
 
-def test_telegram_via_socks5(host, port, timeout=None, deadline=None, sink=None):
+def test_telegram_via_socks5(host, port, timeout=None, deadline=None, sink=None,
+                             max_latency_ms=None):
     """TG 实测（管线入口，两关串行）：先经代理 CONNECT Telegram 数据中心
     （客户端实际线路，其往返毫秒作为延迟），通过后再全链路访问
     desktop.telegram.org 验证可用且无劫持；任一关失败返回 None。
     两关共享单节点总预算 deadline（秒），防个别节点拖垮整轮。
 
     sink：可选回调，每节点调用一次，收到
-    {"stage": "dc_fail"|"deadline"|"web_fail"|"ok", "dc_ms": float, "web_ms": float|None}。
-    只用于度量两关各自的耗时分布（失败节点的耗时在返回值里是拿不到的），
-    不影响返回值与调用语义。
+    {"stage": "dc_fail"|"deadline"|"latency_rejected"|"web_fail"|"ok",
+     "dc_ms": float, "web_ms": float|None}。只用于度量，不影响返回值。
+
+    max_latency_ms：延迟门槛。**传入时启用剪枝**：第一关的往返就是最终的
+    `tg_latency`（门槛比较的就是这个数），所以 `dc_ms > max_latency_ms` 的
+    节点必然被剔除，第二关（TLS+HTTP）不必再跑。这是等价变换，不是估算。
+
+    剪枝时**返回 dc_ms 而不是 None**：让下游把它当成「过了两关但超门槛」，
+    从而 `tg_failed` 计数与「通过则清零连败」的语义都与剪枝前一致。
+    已知偏差：被剪枝节点的第二关结果未知，这里按「连通」计（对拉黑是保守
+    方向——宁可不清零，也不误增连败）。
     """
     if timeout is None:
         timeout = TG_TEST_TIMEOUT_SEC
@@ -621,6 +630,12 @@ def test_telegram_via_socks5(host, port, timeout=None, deadline=None, sink=None)
         if sink is not None:
             sink({"stage": "dc_fail", "dc_ms": round(dc_elapsed, 1), "web_ms": None})
         return None
+    if max_latency_ms is not None and dc_ms > max_latency_ms:
+        # 剪枝：tg_latency 已注定超门槛，第二关跑了也是白跑
+        if sink is not None:
+            sink({"stage": "latency_rejected", "dc_ms": round(dc_elapsed, 1),
+                  "web_ms": None})
+        return dc_ms
     remaining = deadline - (time.perf_counter() - started)
     if remaining <= 1.0:
         if sink is not None:
@@ -656,7 +671,7 @@ def summarize_tg_gates(samples):
         "timeout_sec": TG_TEST_TIMEOUT_SEC,
         "deadline_sec": TG_TEST_DEADLINE_SEC,
     }
-    for stage in ("dc_fail", "deadline", "web_fail", "ok"):
+    for stage in ("dc_fail", "deadline", "latency_rejected", "web_fail", "ok"):
         rows = [r for r in samples if r.get("stage") == stage]
         item = {"count": len(rows)}
         dc = [r["dc_ms"] for r in rows if r.get("dc_ms") is not None]
@@ -1271,7 +1286,7 @@ class ProxyManager:
             futures = {
                 index: executor.submit(
                     test_telegram_via_socks5, entry["host"], entry["port"],
-                    sink=collect,
+                    sink=collect, max_latency_ms=self._max_tg_latency_ms,
                 )
                 for index, entry in enumerate(entries)
                 if entry["type"] == "socks5"

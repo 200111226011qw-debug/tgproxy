@@ -74,9 +74,78 @@ def test_summarize_counts_by_stage():
 def test_summarize_empty_is_safe():
     s = pm.summarize_tg_gates([])
     assert s["total"] == 0
-    for stage in ("dc_fail", "deadline", "web_fail", "ok"):
+    for stage in ("dc_fail", "deadline", "latency_rejected", "web_fail", "ok"):
         assert s[stage]["count"] == 0
         assert "dc_p50" not in s[stage]
+
+
+# --------------------------------------------------------------------------
+# 剪枝：dc_ms 超门槛时跳过第二关（等价变换）
+# --------------------------------------------------------------------------
+
+def test_prune_skips_web_gate_when_dc_exceeds_threshold():
+    def web_must_not_run(h, p, t=None, **k):
+        raise AssertionError("dc_ms 已超门槛，第二关不该被调用")
+
+    records = []
+    with _PatchedGates(lambda h, p, t=None, **k: 2000,
+                       web_must_not_run):
+        value = pm.test_telegram_via_socks5(
+            "1.1.1.1", 1080, sink=records.append, max_latency_ms=1000)
+
+    # 返回值是 dc_ms 而不是 None：下游会当成「过了但超门槛」，
+    # 从而 tg_failed 计数与「通过则清零连败」的语义保持不变
+    assert value == 2000
+    assert len(records) == 1
+    assert records[0]["stage"] == "latency_rejected"
+    assert records[0]["web_ms"] is None
+
+
+def test_prune_boundary_equal_is_not_pruned():
+    """dc_ms == 门槛时应当继续跑第二关（门槛判定用的是 <=）。"""
+    called = []
+
+    def web(h, p, t=None, **k):
+        called.append(1)
+        return 300
+
+    with _PatchedGates(lambda h, p, t=None, **k: 1000, web):
+        value = pm.test_telegram_via_socks5(
+            "1.1.1.1", 1080, max_latency_ms=1000)
+    assert called == [1]
+    assert value == 1000
+
+
+def test_no_prune_when_max_latency_absent():
+    """不传门槛时保持旧行为（不剪枝）。"""
+    called = []
+
+    def web(h, p, t=None, **k):
+        called.append(1)
+        return 300
+
+    with _PatchedGates(lambda h, p, t=None, **k: 5000, web):
+        value = pm.test_telegram_via_socks5("1.1.1.1", 1080)
+    assert called == [1]
+    assert value == 5000
+
+
+def test_manager_marks_pruned_node_as_over_threshold_not_failed():
+    """剪枝节点必须 tg_ok=True（不误增连败）、tg_latency=dc_ms（不被 kept）。"""
+    manager = pm.ProxyManager(max_tg_latency_ms=1000)
+
+    def web_must_not_run(h, p, t=None, **k):
+        raise AssertionError("剪枝后不该调用第二关")
+
+    with _PatchedGates(lambda h, p, t=None, **k: 2000, web_must_not_run):
+        results = manager._test_telegram_entries([_entry("1.1.1.1")])
+
+    assert len(results) == 1
+    assert results[0]["tg_ok"] is True
+    assert results[0]["tg_latency_ms"] == 2000
+    stats = manager.get_state()["tg_gate_stats"]
+    assert stats["latency_rejected"]["count"] == 1
+    assert stats["web_fail"]["count"] == 0
 
 
 # --------------------------------------------------------------------------
