@@ -6,7 +6,7 @@
 
 - **多源定时抓取与自动更新**：并发抓取 5 个经统一体测精选的免费源（hideip.me / proxyscrape / monosans / TheSpeedX / watchttvv，低产池已剔除），按 host:port 去重合并；raw.githubusercontent.com 直连失败自动回退 jsDelivr 镜像（cdn / gcore / fastly）；默认每 10 分钟一轮，间隔 1~1440 分钟可配置，保存即生效并持久化；单源 >1000 条、合并 >3000 条时随机抽样
 
-- **两阶段实测与自动剔除**：第一阶段 TCP 连通性测试（5 秒超时、150 并发）剔除死节点；第二阶段 **TG 实测（两关并行）**——经 SOCKS5 代理 CONNECT Telegram 数据中心（149.154.167.51:443，客户端实际收发消息的线路）+ 全链路访问 `desktop.telegram.org`（TLS 证书校验 + HTTP，验证无劫持），两关都通过才保留
+- **两阶段实测与自动剔除**：第一阶段 TCP 连通性测试（2 秒超时、300 并发）剔除死节点；第二阶段 **TG 实测（两关串行）**——经 SOCKS5 代理 CONNECT Telegram 数据中心（149.154.167.51:443，客户端实际收发消息的线路）+ 全链路访问 `desktop.telegram.org`（TLS 证书校验 + HTTP，验证无劫持），两关都通过才保留
 - **延迟门槛**：TG 延迟 = 经代理到 Telegram 数据中心的往返（与客户端实际线路一致）；默认只保留 **<1000ms** 的节点（界面可调 500~60000ms），不达标直接剔除——列表里全是快且能用的节点
 - **按实测延迟排序**：列表按 TG 线路往返延迟升序；分档着色 <1000ms 绿 / 1000~3000ms 橙 / 更高红
 - **一键唤起 Telegram Desktop**：列表内点「添加到 Telegram」直接唤起本机 Telegram Desktop 弹出添加代理窗口，全程不跳网页。深链格式：SOCKS5 用 `tg://socks?server=&port=`（`tg://proxy` 缺 secret 会被 Telegram 忽略），MTProto 统一收敛为 `tg://` 前缀；接口为 `POST /api/open_telegram`，带同源校验，仅允许唤起当前可用列表中的代理

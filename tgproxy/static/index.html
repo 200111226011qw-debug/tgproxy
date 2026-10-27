@@ -540,6 +540,16 @@
   }
 
   /* ---------- 右栏：数据源 ---------- */
+  /**
+   * raw.githubusercontent.com 在国内直连打不开，点链接等于点了没反应。
+   * 换成 jsDelivr 镜像（与后端 mirror_urls 的规则一致），保证点得开。
+   */
+  function mirrorUrl(url) {
+    var m = /^https?:\/\/raw\.githubusercontent\.com\/([^/]+)\/([^/]+)\/([^/]+)\/(.+)$/.exec(url);
+    if (!m) { return url; }
+    return "https://cdn.jsdelivr.net/gh/" + m[1] + "/" + m[2] + "@" + m[3] + "/" + m[4];
+  }
+
   function renderSourceUrls(urls) {
     var box = $("source-urls");
     box.innerHTML = "";
@@ -551,11 +561,15 @@
       dot.id = "source-dot-" + index;
       row.appendChild(dot);
       var link = document.createElement("a");
-      link.href = url;
+      var target = mirrorUrl(url);
+      link.href = target;
       link.textContent = url.replace(/^https?:\/\//, "");
       link.target = "_blank";
       link.rel = "noopener";
       link.className = "source-link";
+      if (target !== url) {
+        link.title = "GitHub 直连不可用，点击打开 jsDelivr 镜像\n" + target;
+      }
       row.appendChild(link);
       var note = document.createElement("span");
       note.className = "source-note muted";
