@@ -1,6 +1,8 @@
 """tgproxy 入口：启动本地 HTTP 服务、后台定时刷新并打开浏览器。"""
 
 import json
+import logging
+import logging.handlers
 import os
 import subprocess
 import sys
@@ -24,6 +26,7 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     STATIC_DIR = os.path.join(BASE_DIR, "static")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+LOG_PATH = os.path.join(BASE_DIR, "tgproxy.log")
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 
 DEFAULT_PORT = 8765
@@ -132,6 +135,55 @@ def save_config(config):
             json.dump(normalize_config(config), fh, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def setup_logging():
+    """把日志落到 exe 同目录的 tgproxy.log；重复调用幂等。
+
+    windowed 打包后 sys.stdout / sys.stderr 均为 None，任何依赖打印的诊断都会
+    静默消失，所以必须走文件。轮转失败（例如被另一进程占用）时退化为 NullHandler，
+    不阻塞启动——单实例检测落地前，这是唯一的兜底。
+    """
+    logger = logging.getLogger("tgproxy")
+    if logger.handlers:
+        return logger
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s | %(message)s"
+    )
+    try:
+        handler = logging.handlers.RotatingFileHandler(
+            LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        )
+    except OSError:
+        handler = logging.NullHandler()
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    return logger
+
+
+def persist_active_urls(config, urls):
+    """源自动体检替换后，把活跃源列表持久化回 config.json。
+
+    config 与 create_server 收到的 settings 是同一个 dict（main 里传入），
+    因此原地更新即可同时反映到 /api/settings 与后续落盘。
+
+    2026-10-27 修复：原实现是 main() 内的闭包，引用了不存在的 `settings`，
+    每次调用抛 NameError，又被调用点的 `except Exception: pass` 吞掉 ——
+    体检换源从未落盘，重启即回到原样。
+
+    未变化时不写盘：调用点每轮都会触发回调（不限于发生替换的轮次），
+    无条件 save_config 会变成每轮重写一次 config.json。
+    """
+    urls = list(urls)
+    if config.get("proxy_list_urls") == urls:
+        return
+    config["proxy_list_urls"] = urls
+    save_config(config)
+    logging.getLogger("tgproxy").info(
+        "源体检换源已落盘：活跃源 %d 个", len(urls)
+    )
 
 
 def open_external_url(url):
@@ -497,11 +549,8 @@ class ApiHandler(BaseHTTPRequestHandler):
 
 
 def main():
+    setup_logging()
     config = load_config()
-    def persist_active_urls(urls):
-        """源自动体检替换后，把活跃源列表持久化回 config.json。"""
-        settings["proxy_list_urls"] = list(urls)
-        save_config(settings)
 
     manager = ProxyManager(
         config["proxy_list_urls"],
@@ -509,7 +558,7 @@ def main():
         known_good_path=os.path.join(BASE_DIR, "known_good.json"),
         source_health_path=os.path.join(BASE_DIR, "source_health.json"),
         known_bad_path=os.path.join(BASE_DIR, "known_bad.json"),
-        on_sources_changed=persist_active_urls,
+        on_sources_changed=lambda urls: persist_active_urls(config, urls),
         known_good_enabled=config["known_good_enabled"],
     )
     # 用户手动编辑 config.json 加回被停用的源后，重启即宽恕（重新观察）

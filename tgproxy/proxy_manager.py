@@ -1,7 +1,7 @@
 """代理列表抓取、解析、Telegram 适配筛选与连通性测试（仅 Python 标准库）。"""
 
 import json
-import json
+import logging
 import os
 import random
 import re
@@ -14,6 +14,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
+
+logger = logging.getLogger("tgproxy.proxy_manager")
 
 # 默认数据源（2026-10-25 统一标准体检：抓取 -> TCP -> TG 两关实测，按产出质量精选；
 # raw.githubusercontent.com 失败时自动回退 jsDelivr 镜像）
@@ -1073,7 +1075,11 @@ class ProxyManager:
                 try:
                     callback(list(active))
                 except Exception:
-                    pass  # 配置持久化失败不影响运行；下次刷新会再次尝试
+                    # 不再静默：这个回调曾因 NameError + 裸 pass 静默失效，
+                    # 体检换源从未落盘却无人察觉。留痕优先于「不影响运行」。
+                    logger.exception(
+                        "源列表持久化回调失败：活跃源已在内存生效，但未落盘"
+                    )
         parts = []
         if global_zero:
             parts.append(
