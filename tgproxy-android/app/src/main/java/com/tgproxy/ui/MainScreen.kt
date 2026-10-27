@@ -1,123 +1,94 @@
 package com.tgproxy.ui
 
-import android.content.ActivityNotFoundException
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.tgproxy.Constants
-import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ThemeMode
-import com.tgproxy.model.TgVerdict
-import com.tgproxy.ui.components.EmptyStateCard
 import com.tgproxy.ui.components.ErrorBanner
-import com.tgproxy.ui.components.HeroStatusCard
-import com.tgproxy.ui.components.MetricGrid
-import com.tgproxy.ui.components.ProxyActionDialog
-import com.tgproxy.ui.components.ProxyRowCard
 import com.tgproxy.ui.components.SettingsSheetContent
-import com.tgproxy.ui.components.StageTimeline
-import com.tgproxy.ui.components.TgGateSummary
 import com.tgproxy.ui.components.formatCountdown
-import kotlinx.coroutines.delay
+import com.tgproxy.ui.screens.DashboardScreen
+import com.tgproxy.ui.screens.LogsScreen
+import com.tgproxy.ui.screens.NodesScreen
+import com.tgproxy.ui.screens.bestLatencyOf
 import kotlinx.coroutines.launch
 
-/** 「已复制」图标态闪现记录（id 保证相同链接重复复制也能重置 1.5s 计时）。 */
-private data class CopyFlash(val link: String, val id: Long)
-
 /**
- * 主屏幕（v2.1.0 列表优先布局，参考 v2rayNG 的「顶栏 + 卡片列表 + FAB」心智模型）：
+ * 主屏幕外壳：顶栏 + 三页签 + 悬浮刷新按钮 + 设置弹层。
  *
- * 首屏 = 节点列表（下拉刷新）；精简顶栏（标题 + 更新时间/倒计时 + 设置入口）；
- * 刷新按钮为右下角 FAB（刷新中转圈）；状态条/错误条/空态作为列表首项随内容滚动；
- * 设置（间隔 / known_good / 主题 / 数据源说明）收进底部弹层。
+ * 结构：
+ * - [TopAppBar] 标题 / 更新时间与倒计时 / 设置入口
+ * - 内容区上沿的错误条（跨页签常驻：抓取失败时不管在哪个页签都该看得见）
+ * - [HorizontalPager] 承载 [DashboardScreen] / [NodesScreen] / [LogsScreen]
+ * - [PrimaryTabRow] 底部页签，点击走 `animateScrollToPage`（与滑动共用同一状态）
+ * - 悬浮刷新按钮：刷新中转灰并显示转圈，点击不再触发（互斥本来就由 ViewModel 保证，
+ *   这里只是别让用户以为点了没反应）
+ *
+ * 页签状态只由 `pagerState` 一处持有 —— 它是 `rememberSaveable` 支撑的，
+ * 进程被回收后能回到原页。不要再另开一个 `rememberSaveable { selectedTab }`：
+ * 那样会有两个真相源，其中一个永远没人写。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val context = LocalContext.current
-    val clipboard = LocalClipboardManager.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
     var intervalText by remember(settings.intervalMinutes) {
         mutableStateOf(settings.intervalMinutes.toString())
     }
-    var copyFlash by remember { mutableStateOf<CopyFlash?>(null) }
     var showSettings by remember { mutableStateOf(false) }
-    var menuEntry by remember { mutableStateOf<ProxyEntry?>(null) }
 
-    // 复制图标态 1.5s 后自动清除（等价桌面版 1500ms）
-    LaunchedEffect(copyFlash) {
-        if (copyFlash != null) {
-            delay(Constants.COPY_FEEDBACK_MS)
-            copyFlash = null
-        }
-    }
+    val tabs = MainTab.entries
+    val pagerState = rememberPagerState(pageCount = { tabs.size })
 
-    // 复制链接（可选 Snackbar 反馈）
-    val copyLink: (ProxyEntry, Boolean) -> Unit = { entry, notify ->
-        clipboard.setText(AnnotatedString(entry.link))
-        copyFlash = CopyFlash(entry.link, (copyFlash?.id ?: 0L) + 1L)
-        if (notify) {
-            scope.launch { snackbarHostState.showSnackbar("已复制") }
-        }
-    }
+    // 在 pager 的 content lambda 外面算：lambda 在滑动过程中会随 pager 状态反复
+    // 执行，2000 条过滤 + minOf 每帧跑一遍没必要。按列表实例缓存，换列表才算。
+    val bestLatencyMs = remember(uiState.proxies) { bestLatencyOf(uiState.proxies) }
 
-    // 使用节点：唤起 Telegram 直接弹出「添加代理」窗口（不经过网页；未安装则降级复制）
-    val onUse: (ProxyEntry) -> Unit = { entry ->
-        try {
-            context.startActivity(buildTelegramViewIntent(toTelegramProxyUrl(entry)))
-        } catch (e: ActivityNotFoundException) {
-            copyLink(entry, false)
-            scope.launch { snackbarHostState.showSnackbar("未安装 Telegram，已复制链接") }
-        }
-    }
+    // 两个页的滚动位置提升到这里，而不是依赖 pager 内部是否给了 SaveableStateHolder：
+    // MainScreen 在切页时始终在组合里，状态一定活得住。`rememberLazyListState` 本身
+    // 走 rememberSaveable，进程被回收后也能恢复。
+    val dashboardListState = rememberLazyListState()
+    val nodesListState = rememberLazyListState()
 
-    // 分享：系统分享面板
-    val onShare: (ProxyEntry) -> Unit = { entry ->
-        try {
-            context.startActivity(buildShareIntent(entry.link))
-        } catch (e: ActivityNotFoundException) {
-            scope.launch { snackbarHostState.showSnackbar("分享不可用") }
-        }
+    val showMessage: (String) -> Unit = { message ->
+        scope.launch { snackbarHostState.showSnackbar(message) }
     }
 
     Scaffold(
@@ -158,139 +129,79 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 ),
             )
         },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.refresh() },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
+        bottomBar = {
+            // navigationBarsPadding 不能省：targetSdk 35 在 Android 15 上强制
+            // edge-to-edge，而 PrimaryTabRow 不像 TopAppBar 那样自带窗口内边距，
+            // 不加的话页签文字会压在手势条 / 三键导航下面。
+            PrimaryTabRow(
+                selectedTabIndex = pagerState.currentPage,
+                modifier = Modifier.navigationBarsPadding(),
             ) {
-                if (uiState.fetching) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.padding(14.dp),
-                        strokeWidth = 2.5.dp,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = "刷新",
-                        modifier = Modifier.padding(14.dp),
+                tabs.forEachIndexed { index, tab ->
+                    Tab(
+                        selected = pagerState.currentPage == index,
+                        onClick = {
+                            if (pagerState.currentPage != index) {
+                                scope.launch { pagerState.animateScrollToPage(index) }
+                            }
+                        },
+                        text = { Text(tab.title) },
                     )
                 }
             }
         },
+        floatingActionButton = {
+            RefreshFab(
+                fetching = uiState.fetching,
+                onRefresh = { viewModel.refresh() },
+            )
+        },
     ) { innerPadding ->
-        Surface(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            color = MaterialTheme.colorScheme.background,
         ) {
-            PullToRefreshBox(
-                isRefreshing = uiState.fetching,
-                onRefresh = { viewModel.refresh() },
-            ) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    // 仪表盘 Hero 大卡 + 四段统计卡（刷新中 = 阶段进度；空闲 = 大数字 + 摘要）
-                    item {
-                        val bestLatencyMs = uiState.proxies
-                            .filter { it.tgVerdict == TgVerdict.PASS && it.latencyMs != null }
-                            .minOfOrNull { it.latencyMs!! }
-                        // progress 在 item 内部订阅，不在 MainScreen 顶层读：
-                        // 顶层读会让 MainScreen 每次进度跳动都重组，进而重跑整个
-                        // LazyColumn 的 content lambda（2000 条 keyed 列表的重新
-                        // 注册与 diff）。放在这里，一次进度变化只重组这一张卡。
-                        val progress by viewModel.progress.collectAsStateWithLifecycle()
-                        HeroStatusCard(
-                            fetching = uiState.fetching,
-                            progress = progress,
-                            lastDurationMs = uiState.lastDurationMs,
-                            stats = uiState.stats,
-                            bestLatencyMs = bestLatencyMs,
-                            countdownSec = uiState.countdownSec,
-                            countdownStarted = uiState.countdownStarted,
-                            modifier = Modifier.padding(top = 4.dp),
-                        )
-                    }
-                    // 自适应指标网格（可用数 / 超门槛 / DC 失败 / 站点失败 / TCP 不通 / 已拉黑）
-                    // 水平内边距由 contentPadding 统一给，此处不再叠加
-                    item {
-                        MetricGrid(
-                            stats = uiState.stats,
-                            tgStats = uiState.tgStats,
-                        )
-                    }
-                    // 漏斗解释：把「测了 N 个却只剩 M 个」说清楚
-                    // 槽位按 hasData 判定：无数据时整个 item 不发射，避免 spacedBy 留出空档
-                    if (uiState.tgStats.hasData) {
-                        item {
-                            TgGateSummary(tgStats = uiState.tgStats)
-                        }
-                    }
-                    // 上轮分阶段耗时（本轮进行中没有实时值）
-                    if (uiState.durations.hasData) {
-                        item {
-                            StageTimeline(durations = uiState.durations)
-                        }
-                    }
+            // 错误条放在 pager 外面：跨页签常驻，不随页面滚走
+            val error = uiState.error
+            if (error != null) {
+                ErrorBanner(
+                    message = error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                )
+            }
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.weight(1f),
+            ) { page ->
+                when (tabs[page]) {
+                    MainTab.DASHBOARD -> DashboardScreen(
+                        fetching = uiState.fetching,
+                        stats = uiState.stats,
+                        tgStats = uiState.tgStats,
+                        durations = uiState.durations,
+                        lastDurationMs = uiState.lastDurationMs,
+                        bestLatencyMs = bestLatencyMs,
+                        countdownSec = uiState.countdownSec,
+                        countdownStarted = uiState.countdownStarted,
+                        progressFlow = viewModel.progress,
+                        listState = dashboardListState,
+                    )
 
-                    // 错误提示条（条件显示）
-                    val error = uiState.error
-                    if (error != null) {
-                        item {
-                            ErrorBanner(message = error)
-                        }
-                    }
+                    MainTab.NODES -> NodesScreen(
+                        proxies = uiState.proxies,
+                        stats = uiState.stats,
+                        fetching = uiState.fetching,
+                        onRefresh = { viewModel.refresh() },
+                        onMessage = showMessage,
+                        listState = nodesListState,
+                    )
 
-                    if (uiState.proxies.isEmpty()) {
-                        item {
-                            EmptyStateCard(
-                                stats = uiState.stats,
-                                fetching = uiState.fetching,
-                            )
-                        }
-                    } else {
-                        items(
-                            items = uiState.proxies,
-                            key = { it.link },
-                            contentType = { it.type },
-                        ) { entry ->
-                            ProxyRowCard(
-                                entry = entry,
-                                copied = copyFlash?.link == entry.link,
-                                onUse = { onUse(entry) },
-                                onLongClick = { menuEntry = entry },
-                                onCopy = { copyLink(entry, true) },
-                                onShare = { onShare(entry) },
-                            )
-                        }
-                    }
-
-                    // 页脚
-                    item {
-                        Text(
-                            text = "TG 两关实测 · 仅保留 ≤${Constants.TG_LATENCY_LIMIT_MS}ms · 点「使用」一键连 Telegram",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 88.dp),
-                        )
-                    }
+                    MainTab.LOGS -> LogsScreen()
                 }
             }
         }
     }
-
-    // 长按菜单
-    ProxyActionDialog(
-        entry = menuEntry,
-        onDismiss = { menuEntry = null },
-        onCopy = { copyLink(it, true) },
-        onShare = onShare,
-    )
 
     // 设置底部弹层
     if (showSettings) {
@@ -307,6 +218,44 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+/**
+ * 悬浮刷新按钮（三态的第一态：空闲可点 / 刷新中置灰转圈）。
+ *
+ * 「取消」不做：那需要轮级事务（见 ARCHITECTURE 里对取消的结论），先把文案与
+ * 可点性做对，等事务落地再把「正在刷新」换成「取消」。
+ */
+@Composable
+private fun RefreshFab(fetching: Boolean, onRefresh: () -> Unit) {
+    ExtendedFloatingActionButton(
+        onClick = { if (!fetching) onRefresh() },
+        containerColor = if (fetching) {
+            MaterialTheme.colorScheme.surfaceVariant
+        } else {
+            MaterialTheme.colorScheme.primary
+        },
+        contentColor = if (fetching) {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        } else {
+            MaterialTheme.colorScheme.onPrimary
+        },
+        icon = {
+            if (fetching) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = null,
+                )
+            }
+        },
+        text = { Text(if (fetching) "正在刷新" else "刷新") },
+    )
 }
 
 /** 主题模式循环：SYSTEM → LIGHT → DARK → SYSTEM。 */
