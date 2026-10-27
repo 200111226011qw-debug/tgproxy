@@ -61,6 +61,7 @@
     border-radius: 8px; font-size: 13px;
   }
   .settings-msg { font-size: 12px; color: #16a34a; }
+  .quit-screen { padding: 64px 24px; text-align: center; color: #6b7280; font-size: 14px; }
   .source-caption { font-size: 12px; margin-bottom: 4px; }
   .source-urls { display: flex; flex-direction: column; gap: 2px; }
   .source-row { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
@@ -192,6 +193,7 @@
     </div>
     <div class="toolbar-meta">
       <span id="countdown" class="muted">下次自动更新：--</span>
+      <button id="exit-btn" class="btn" type="button" title="停止服务并退出程序">退出</button>
     </div>
   </section>
 
@@ -230,6 +232,8 @@
 
   var POLL_INTERVAL_MS = 2500;
   var state = { settings: null, nextRunAt: null, fetching: false };
+  // 已请求退出：停掉轮询，避免服务关掉后每 2.5s 抛一次网络错误
+  var quitting = false;
 
   function $(id) { return document.getElementById(id); }
   var tbody = $("proxy-tbody");
@@ -351,6 +355,7 @@
   }
 
   function poll() {
+    if (quitting) return;
     fetchJson("/api/proxies")
       .then(render)
       .catch(function () { /* 服务未就绪时静默，下一轮重试 */ });
@@ -547,6 +552,19 @@
 
   refreshBtn.addEventListener("click", refresh);
   $("save-interval-btn").addEventListener("click", saveSettings);
+
+  // 退出：打包成无控制台后没有别的方式关掉进程，这个入口是必需项。
+  // 服务端先回响应再 shutdown，所以通常能拿到 200；拿不到也属正常（连接被重置）。
+  $("exit-btn").addEventListener("click", function () {
+    if (!confirm("退出 tgproxy？服务会停止，下次需要重新双击启动。")) return;
+    quitting = true;
+    fetchJson("/api/shutdown", { method: "POST" })
+      .catch(function () { return {}; })
+      .then(function () {
+        document.body.innerHTML =
+          '<div class="quit-screen">tgproxy 已退出，可以关闭此页面。</div>';
+      });
+  });
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden) { poll(); }
   });

@@ -17,6 +17,26 @@ from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger("tgproxy.proxy_manager")
 
+
+def _atomic_write_json(path, payload, **dump_kwargs):
+    """先写同目录临时文件再 os.replace，避免中断留下截断的半个 JSON。
+
+    known_good / known_bad / source_health 是「取消」或「强制退出」时唯一
+    可能被截断的落盘点；一旦截断，对应的 _load_* 会静默返回空表，沉淀与
+    拉黑表无声清零，而界面上看不出任何异常。
+    """
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, **dump_kwargs)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
 # 默认数据源（2026-10-25 统一标准体检：抓取 -> TCP -> TG 两关实测，按产出质量精选；
 # raw.githubusercontent.com 失败时自动回退 jsDelivr 镜像）
 DEFAULT_PROXY_LIST_URLS = [
@@ -875,11 +895,8 @@ class ProxyManager:
         records.sort(
             key=lambda r: r["tg_latency_ms"] if r["tg_latency_ms"] is not None else 1 << 30
         )
-        try:
-            with open(self._known_good_path, "w", encoding="utf-8") as fh:
-                json.dump(records[:200], fh, ensure_ascii=False, indent=1)
-        except OSError:
-            pass
+        _atomic_write_json(self._known_good_path, records[:200],
+                           ensure_ascii=False, indent=1)
 
     # ------------------------------------------------------------------
     # 连续失败拉黑（v1.9.0：连败达标的节点跳过测试，节省筛选时间）
@@ -944,11 +961,8 @@ class ProxyManager:
                              key=lambda kv: kv[1]["last_fail"])
             for key, _item in ordered[:len(self._known_bad) - KNOWN_BAD_MAX_ENTRIES]:
                 self._known_bad.pop(key, None)
-        try:
-            with open(self._known_bad_path, "w", encoding="utf-8") as fh:
-                json.dump(self._known_bad, fh, ensure_ascii=False)
-        except OSError:
-            pass
+        _atomic_write_json(self._known_bad_path, self._known_bad,
+                           ensure_ascii=False)
 
     def forgive_sources(self, urls):
         """对给定 URL 中的「被停用源」执行宽恕（清 parked/hist/fails，重新观察）。
@@ -983,11 +997,8 @@ class ProxyManager:
         """落盘逐源健康度（写盘失败不影响运行）。"""
         if not self._source_health_path:
             return
-        try:
-            with open(self._source_health_path, "w", encoding="utf-8") as fh:
-                json.dump(health, fh, ensure_ascii=False, indent=1)
-        except OSError:
-            pass
+        _atomic_write_json(self._source_health_path, health,
+                           ensure_ascii=False, indent=1)
 
     def _update_source_health(self, sources, per_src_verified):
         """逐源体检：更新健康度；连续失败或连续 0 产出的源停用，并从候选池补位。

@@ -4,10 +4,12 @@ import json
 import logging
 import logging.handlers
 import os
+import socket
 import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
@@ -21,21 +23,40 @@ from proxy_manager import (
 # PyInstaller 冻结运行时：可执行文件目录存配置，解包目录（_MEIPASS）取静态资源
 if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(os.path.abspath(sys.executable))
-    STATIC_DIR = os.path.join(getattr(sys, "_MEIPASS", BASE_DIR), "static")
+    RESOURCE_DIR = getattr(sys, "_MEIPASS", BASE_DIR)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    STATIC_DIR = os.path.join(BASE_DIR, "static")
+    RESOURCE_DIR = BASE_DIR
+STATIC_DIR = os.path.join(RESOURCE_DIR, "static")
+VERSION_PATH = os.path.join(RESOURCE_DIR, "VERSION")
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 LOG_PATH = os.path.join(BASE_DIR, "tgproxy.log")
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 
 DEFAULT_PORT = 8765
 MAX_PORT_OFFSET = 50
+# 单实例锁端口：不监听、只 bind，用来判断「是否已有本程序在跑」。
+# 取 DEFAULT_PORT-1，避开 HTTP 服务的顺延区间。
+SINGLETON_PORT = DEFAULT_PORT - 1
+_singleton_socket = None
 MIN_INTERVAL_MINUTES = 1
 MAX_INTERVAL_MINUTES = 1440
 MAX_PROXY_LIST_URLS = 20
 MIN_TG_LATENCY_MS = 500
 MAX_TG_LATENCY_MS = 60000
+
+
+def get_app_version():
+    """读取 VERSION 单一源；缺失时返回 "unknown"，不让版本号缺失阻断启动。"""
+    try:
+        with open(VERSION_PATH, "r", encoding="utf-8") as fh:
+            version = fh.read().strip()
+        return version or "unknown"
+    except OSError:
+        return "unknown"
+
+
+APP_VERSION = get_app_version()
 
 MIME_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -129,12 +150,18 @@ def load_config():
 
 
 def save_config(config):
-    """持久化配置到 config.json（写入失败不影响运行）。"""
+    """持久化配置到 config.json（原子写；写入失败不影响运行）。"""
+    tmp = CONFIG_PATH + ".tmp"
     try:
-        with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(normalize_config(config), fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, CONFIG_PATH)
     except OSError:
-        pass
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def setup_logging():
@@ -161,6 +188,15 @@ def setup_logging():
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     return logger
+
+
+def _flush_logging():
+    """退出前把日志刷盘——os._exit 不会跑 handler 的 atexit。"""
+    for handler in logging.getLogger("tgproxy").handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
 
 
 def persist_active_urls(config, urls):
@@ -293,6 +329,48 @@ class TgProxyServer(ThreadingHTTPServer):
         return self.public_settings()
 
 
+def acquire_single_instance():
+    """用「绑定固定回环端口」做单实例锁，返回 True 表示拿到了锁。
+
+    为什么不用锁文件：进程被强杀时文件删不掉，会留下永久假锁。
+    为什么不用扫端口：实测 Windows 对回环关闭端口不是立刻 RST，而是等满
+    timeout —— 扫 51 个端口要 10.4s，等于每次冷启动白等 10 秒。
+    socket 由操作系统在进程退出时释放，异常退出也能自动解锁。
+    """
+    global _singleton_socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", SINGLETON_PORT))
+    except OSError:
+        sock.close()
+        return False
+    # 保活：进程存活期间一直占着这个端口，不能被 GC 掉
+    _singleton_socket = sock
+    return True
+
+
+def probe_instance(port):
+    """探测指定端口上是否是本程序的实例。
+
+    只认 `/api/version` 返回 `app == "tgproxy"` 的响应——端口被别的软件占用
+    是正常情况（create_server 会顺延），不能据此判定为重复实例。
+    """
+    if not 1 <= port <= 65535:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.15)
+        if probe.connect_ex(("127.0.0.1", port)) != 0:
+            return False
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:%d/api/version" % port, timeout=1.0
+        ) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return False
+    return isinstance(payload, dict) and payload.get("app") == "tgproxy"
+
+
 def create_server(handler, manager, settings):
     """从配置端口开始探测，被占用则顺延，最多 MAX_PORT_OFFSET 个。"""
     last_error = None
@@ -340,7 +418,18 @@ class ApiHandler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
     def log_message(self, fmt, *args):
-        sys.stdout.write("[http] %s\n" % (fmt % args))
+        """HTTP 访问日志。
+
+        windowed 打包后 sys.stdout 是 None，而 send_response() 会先调
+        log_request → log_message 再写响应头；直接 write 会让每个请求在发响应
+        之前抛 AttributeError，整个服务不可用。必须短路。
+        """
+        if sys.stdout:
+            sys.stdout.write("[http] %s\n" % (fmt % args))
+        # 高频访问日志只进 DEBUG，避免 2.5s 轮询把日志文件刷满
+        logging.getLogger("tgproxy.http").debug(
+            "%s %s", self.address_string(), fmt % args
+        )
 
     def do_GET(self):
         try:
@@ -353,6 +442,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                     else 0
                 )
                 self._send_json(state)
+            elif path == "/api/version":
+                self._send_json({"app": "tgproxy", "version": APP_VERSION})
             elif path == "/api/settings":
                 self._send_json(self.server.public_settings())
             elif path in ("/", "/index.html"):
@@ -392,6 +483,14 @@ class ApiHandler(BaseHTTPRequestHandler):
             if path == "/api/refresh":
                 self.server.manager.refresh_async()
                 self._send_json({"ok": True})
+            elif path == "/api/shutdown":
+                # 先回响应再关服务：shutdown() 会阻塞到 serve_forever 退出，
+                # 必须放到独立线程，否则响应发不出去、前端只看到连接被重置。
+                # 注意不能在子线程里 sys.exit()——那只会在该线程抛 SystemExit，
+                # 进程不会退出；正确做法是让 serve_forever 返回，main() 自然结束。
+                self._send_json({"ok": True, "message": "正在退出"})
+                logging.getLogger("tgproxy").info("收到 /api/shutdown，服务即将退出")
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
             elif path == "/api/settings":
                 self._handle_settings_update()
             elif path == "/api/open_telegram":
@@ -552,6 +651,30 @@ def main():
     setup_logging()
     config = load_config()
 
+    running_port = None
+    if not acquire_single_instance():
+        # 锁被占：要么真有另一个实例，要么这个端口被别的软件占了。
+        # config 里存的是上次成功绑定的端口，所以只探这一个就够。
+        if probe_instance(config["port"]):
+            running_port = config["port"]
+        else:
+            logging.getLogger("tgproxy").warning(
+                "单实例锁端口 %d 被占用，但 %d 上没有本程序的实例，"
+                "继续启动（本次无单实例保护）",
+                SINGLETON_PORT, config["port"],
+            )
+    if running_port is not None:
+        address = "http://127.0.0.1:%d/" % running_port
+        logging.getLogger("tgproxy").info(
+            "检测到已有实例（端口 %d），打开浏览器后退出", running_port
+        )
+        print("tgproxy %s 已在运行: %s" % (APP_VERSION, address))
+        try:
+            webbrowser.open(address)
+        except Exception:
+            pass
+        return
+
     manager = ProxyManager(
         config["proxy_list_urls"],
         config["max_tg_latency_ms"],
@@ -575,7 +698,7 @@ def main():
     ).start()
 
     address = "http://127.0.0.1:%d/" % port
-    print("tgproxy 已启动: %s" % address)
+    print("tgproxy %s 已启动: %s" % (APP_VERSION, address))
     print("配置文件: %s" % CONFIG_PATH)
     print("按 Ctrl+C 退出。")
     try:
@@ -590,6 +713,13 @@ def main():
     finally:
         server.scheduler.stop()
         server.server_close()
+        logging.getLogger("tgproxy").info("tgproxy %s 已退出", APP_VERSION)
+        _flush_logging()
+        # 退出时若正有一轮刷新在跑，concurrent.futures 的 atexit 钩子会 join
+        # 所有 worker 线程（最坏等于一整轮耗时，实测 >12s），表现为「点了退出
+        # 但进程挂着」。这里直接结束进程。落盘已全部改为原子写（tmp +
+        # os.replace），强退不会留下半个 JSON。
+        os._exit(0)
 
 
 if __name__ == "__main__":
