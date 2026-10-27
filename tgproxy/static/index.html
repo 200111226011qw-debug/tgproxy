@@ -1,247 +1,377 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Telegram 代理管理</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TGProxy · Telegram 代理控制台</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  [hidden] { display: none !important; }
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #e4e7ec;
+    --border-strong: #d3d8e0;
+    --text: #101828;
+    --text-2: #475467;
+    --muted: #98a2b3;
+    --accent: #2563eb;
+    --accent-soft: #eff4ff;
+    --green: #16a34a;
+    --green-soft: #ecfdf3;
+    --amber: #d97706;
+    --amber-soft: #fffaeb;
+    --red: #dc2626;
+    --red-soft: #fef3f2;
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(16, 24, 40, .05);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-    background: #f4f6fa;
-    color: #1f2937;
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  .container { max-width: 1120px; margin: 0 auto; padding: 24px 20px 40px; }
+  button, input { font: inherit; }
+  .muted { color: var(--muted); }
+  .num { font-variant-numeric: tabular-nums; }
 
-  .page-header {
-    display: flex; justify-content: space-between; align-items: flex-end;
-    flex-wrap: wrap; gap: 8px; margin-bottom: 18px;
+  /* ---------- 布局 ---------- */
+  .app {
+    display: grid;
+    grid-template-columns: 232px minmax(0, 1fr) 348px;
+    gap: 16px;
+    padding: 16px;
+    height: 100vh;
+    align-items: stretch;
   }
-  h1 { font-size: 22px; font-weight: 700; }
-  .subtitle { font-size: 13px; color: #6b7280; margin-top: 4px; }
-  .muted { color: #6b7280; font-size: 13px; }
+  .col {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .col-left { padding: 16px; gap: 16px; }
+  .col-main { overflow: hidden; }
+  .col-right { padding: 14px; gap: 14px; overflow-y: auto; }
 
-  .stats-grid {
-    display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: 14px; margin-bottom: 14px;
+  /* 断点：1360 以下右栏进抽屉（此处直接隐藏并给按钮），<900 单列 */
+  @media (max-width: 1359px) {
+    .app { grid-template-columns: 208px minmax(0, 1fr); }
+    .col-right { display: none; }
+    .app.show-right { grid-template-columns: 208px minmax(0, 1fr) 320px; }
+    .app.show-right .col-right { display: flex; }
   }
-  .stat-card {
-    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
-    padding: 14px 16px; border-left: 4px solid #2563eb;
+  @media (max-width: 899px) {
+    .app { grid-template-columns: minmax(0, 1fr); height: auto; }
+    .col-left { flex-direction: row; flex-wrap: wrap; align-items: center; }
+    .col-main { min-height: 70vh; }
   }
-  .stat-card.stat-green { border-left-color: #16a34a; }
-  .stat-card.stat-gray { border-left-color: #9ca3af; }
-  .stat-card.stat-orange { border-left-color: #d97706; }
-  .stat-label { font-size: 13px; color: #6b7280; }
-  .stat-value { font-size: 26px; font-weight: 700; margin-top: 2px; }
 
-  .error-banner {
-    background: #fee2e2; border: 1px solid #fecaca; color: #b91c1c;
-    border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-bottom: 14px;
+  /* ---------- 左栏 ---------- */
+  .brand { display: flex; align-items: baseline; gap: 8px; }
+  .brand-name { font-size: 16px; font-weight: 650; letter-spacing: .2px; }
+  .brand-ver {
+    font-size: 11px; color: var(--text-2); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px;
   }
+  .status-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 550;
+    background: var(--bg); color: var(--text-2); border: 1px solid var(--border);
+    align-self: flex-start;
+  }
+  .status-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .status-pill.running { background: var(--accent-soft); color: #1d4ed8; border-color: #c7d7fe; }
+  .status-pill.running .dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  .side-block { display: flex; flex-direction: column; gap: 6px; }
+  .side-label { font-size: 11px; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); }
+  .big-num { font-size: 34px; font-weight: 680; line-height: 1.1; letter-spacing: -.5px; }
+  .big-sub { font-size: 12px; color: var(--text-2); }
+  .kv { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+  .kv .k { color: var(--text-2); }
+  .spacer { flex: 1 1 auto; }
+
+  /* ---------- 按钮 ---------- */
+  .btn {
+    appearance: none; cursor: pointer; border-radius: 9px;
+    border: 1px solid var(--border-strong); background: #fff; color: var(--text);
+    padding: 7px 12px; font-size: 13px; transition: background .12s, border-color .12s;
+  }
+  .btn:hover:not(:disabled) { background: #f9fafb; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+  .btn-ghost { border-color: transparent; color: var(--text-2); }
+  .btn-ghost:hover:not(:disabled) { background: var(--bg); }
+  .btn-danger { color: var(--red); border-color: #fecdca; background: var(--red-soft); }
+  .btn-danger:hover:not(:disabled) { background: #fee4e2; }
+  .btn-block { width: 100%; justify-content: center; }
+
+  /* ---------- 中栏 ---------- */
+  .hero {
+    position: relative;
+    padding: 18px 20px;
+    background: linear-gradient(120deg, #2563eb, #0ea5e9 70%, #06b6d4);
+    color: #fff;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .hero-title { font-size: 12.5px; opacity: .9; letter-spacing: .3px; }
+  .hero-big { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+  .hero-big .n { font-size: 40px; font-weight: 700; letter-spacing: -1px; line-height: 1; }
+  .hero-big .u { font-size: 13px; opacity: .85; }
+  .hero-meta { display: flex; gap: 22px; margin-top: 12px; flex-wrap: wrap; }
+  .hero-meta .m { display: flex; flex-direction: column; gap: 1px; }
+  .hero-meta .m b { font-size: 14px; font-weight: 600; }
+  .hero-meta .m span { font-size: 11px; opacity: .82; }
+  .hero-bar {
+    margin-top: 14px; height: 4px; border-radius: 999px;
+    background: rgba(255, 255, 255, .28); overflow: hidden;
+  }
+  .hero-bar > i {
+    display: block; height: 100%; width: 34%; border-radius: 999px;
+    background: #fff; opacity: .9;
+    animation: slide 1.25s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0% { transform: translateX(-110%); }
+    100% { transform: translateX(320%); }
+  }
+  .hero-bar[hidden] { display: none; }
 
   .toolbar {
-    display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
-    background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
-    padding: 12px 14px; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 16px; border-bottom: 1px solid var(--border); background: #fff;
   }
-  .btn {
-    border: 1px solid #d1d5db; background: #fff; color: #1f2937;
-    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  .field { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+  .field input[type=number] {
+    width: 78px; padding: 5px 8px; border: 1px solid var(--border-strong);
+    border-radius: 8px; color: var(--text);
   }
-  .btn:hover { background: #f9fafb; }
-  .btn:disabled { opacity: .6; cursor: not-allowed; }
-  .btn-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
-  .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
-  .interval-group { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #374151; }
-  .interval-group input {
-    width: 76px; padding: 6px 8px; border: 1px solid #d1d5db;
-    border-radius: 8px; font-size: 13px;
-  }
-  .settings-msg { font-size: 12px; color: #16a34a; }
-  .quit-screen { padding: 64px 24px; text-align: center; color: #6b7280; font-size: 14px; }
-  .source-caption { font-size: 12px; margin-bottom: 4px; }
-  .source-urls { display: flex; flex-direction: column; gap: 2px; }
-  .source-row { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
-  .source-dot { width: 8px; height: 8px; border-radius: 50%; background: #9ca3af; flex: none; }
-  .source-link { color: #4b5563; text-decoration: none; word-break: break-all; }
-  .source-link:hover { color: #2563eb; text-decoration: underline; }
-  .source-note { flex: none; }
-  .source-notice { font-size: 12px; color: #92400e; background: #fef3c7;
-    border: 1px solid #fcd34d; border-radius: 6px; padding: 4px 8px; margin-bottom: 4px; }
-  .kg-switch { display: inline-flex; align-items: center; gap: 4px; font-size: 12px;
-    color: #374151; white-space: nowrap; }
-  .kg-switch input { margin: 0; }
-  .tg-btn { font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid #229ed9;
-    color: #229ed9; background: transparent; cursor: pointer; white-space: nowrap; }
-  .tg-btn:hover { background: #229ed9; color: #fff; }
-  .tg-btn:disabled { opacity: 0.6; cursor: default; }
-  .tg-btn.tg-fail { border-color: #dc2626; color: #dc2626; }
-  .toolbar-meta { margin-left: auto; }
+  .field input[type=number]:focus { outline: 2px solid #c7d7fe; border-color: var(--accent); }
+  .switch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+  .settings-msg { font-size: 12px; }
+  .toolbar .right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
-  .table-wrapper {
-    position: relative; background: #fff; border: 1px solid #e5e7eb;
-    border-radius: 10px; overflow: hidden;
-  }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .table-wrap { flex: 1 1 auto; overflow: auto; min-height: 0; position: relative; }
+  table { width: 100%; border-collapse: collapse; }
   thead th {
-    text-align: left; padding: 10px 12px; background: #f9fafb; color: #6b7280;
-    font-weight: 600; font-size: 12px; border-bottom: 1px solid #e5e7eb;
+    position: sticky; top: 0; z-index: 1;
+    background: #fafbfc; color: var(--text-2); font-weight: 600; font-size: 12px;
+    text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--border);
     white-space: nowrap;
   }
-  tbody td { padding: 10px 12px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
-  tbody tr:last-child td { border-bottom: none; }
-  tbody tr:hover { background: #f9fafb; }
-  .empty-row td { text-align: center; color: #9ca3af; padding: 28px 0; }
+  tbody td { padding: 9px 14px; border-bottom: 1px solid #f2f4f7; font-size: 13px; }
+  tbody tr:hover { background: #fafbfc; }
+  .empty-row td { text-align: center; color: var(--muted); padding: 40px 12px; }
 
   .badge {
-    display: inline-block; padding: 2px 10px; border-radius: 999px;
-    font-size: 12px; font-weight: 600; white-space: nowrap;
+    display: inline-block; padding: 1px 7px; border-radius: 6px;
+    font-size: 11px; font-weight: 600; letter-spacing: .2px;
   }
-  .badge-available { background: #dcfce7; color: #15803d; }
-  .badge-unavailable { background: #f3f4f6; color: #6b7280; }
-  .badge-socks5 { background: #dbeafe; color: #1d4ed8; }
-  .badge-mtproto { background: #ede9fe; color: #6d28d9; }
-
-  .lat { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
-  .lat-green { color: #16a34a; }
-  .lat-orange { color: #d97706; }
-  .lat-red { color: #dc2626; }
-  .lat-none { color: #9ca3af; font-weight: 400; }
+  .badge-socks5 { background: var(--accent-soft); color: #1d4ed8; }
+  .badge-mtproto { background: #f4f3ff; color: #6941c6; }
+  .badge-unavailable { background: var(--bg); color: var(--text-2); }
+  .lat { font-variant-numeric: tabular-nums; }
+  .lat-green { color: var(--green); }
+  .lat-orange { color: var(--amber); }
+  .lat-red { color: var(--red); }
+  .lat-none { color: var(--muted); }
 
   .link-btn {
-    display: inline-flex; align-items: center; gap: 6px; background: none;
-    border: none; padding: 0; font: inherit;
-    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-    color: #2563eb; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    background: none; border: 0; padding: 0; cursor: pointer;
+    color: var(--text); font-variant-numeric: tabular-nums;
   }
-  .link-btn:hover { text-decoration: underline; }
-  .link-btn svg { flex: none; }
-  .link-btn.copied { color: #16a34a; }
+  .link-btn:hover { color: var(--accent); }
+  .link-btn.copied { color: var(--green); }
+  .tg-btn {
+    font-size: 12px; padding: 3px 10px; border-radius: 7px;
+    border: 1px solid #a5d8f3; background: #f0f9ff; color: #0b7fb3; cursor: pointer;
+  }
+  .tg-btn:hover:not(:disabled) { background: #229ed9; border-color: #229ed9; color: #fff; }
+  .tg-btn:disabled { opacity: .55; cursor: default; }
 
   .loading-overlay {
-    position: absolute; inset: 0; display: flex; align-items: center;
-    justify-content: center; gap: 10px; background: rgba(255, 255, 255, .75);
-    color: #374151; font-size: 13px;
+    position: absolute; inset: 0; background: rgba(255, 255, 255, .62);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12.5px; color: var(--text-2);
   }
-  .spinner {
-    width: 16px; height: 16px; border: 2px solid #d1d5db; border-top-color: #2563eb;
-    border-radius: 50%; animation: spin .8s linear infinite;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  /* display:flex 会压过 UA 的 [hidden]{display:none}，必须显式补一条 */
+  .loading-overlay[hidden] { display: none; }
+  .main-body { position: relative; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 
-  .page-footer { margin-top: 14px; font-size: 12px; }
-
-  @media (max-width: 720px) {
-    .stats-grid { grid-template-columns: repeat(2, 1fr); }
-    .toolbar-meta { margin-left: 0; }
+  /* ---------- 右栏 ---------- */
+  .panel-title {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+    font-size: 12px; font-weight: 650; letter-spacing: .3px; color: var(--text-2);
+    margin-bottom: 8px;
   }
+  .panel-title .hint { font-weight: 400; font-size: 11px; color: var(--muted); }
+
+  .stage-row { margin-bottom: 9px; }
+  .stage-head { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+  .stage-head .t { color: var(--text-2); }
+  .stage-head .v { font-variant-numeric: tabular-nums; color: var(--text); }
+  .stage-track { height: 6px; border-radius: 999px; background: #f2f4f7; overflow: hidden; }
+  .stage-track > i { display: block; height: 100%; border-radius: 999px; }
+  .c-fetch { background: #0ea5e9; }
+  .c-prepare { background: #94a3b8; }
+  .c-tcp { background: #2563eb; }
+  .c-tg { background: #7c3aed; }
+  .c-commit { background: #16a34a; }
+
+  .gate-list { display: flex; flex-direction: column; gap: 7px; }
+  .gate-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .gate-row .name { flex: 1 1 auto; color: var(--text-2); }
+  .gate-row .cnt { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .gate-row .p50 { width: 62px; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+
+  .source-row { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 3px 0; }
+  .source-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+  .source-link {
+    color: var(--text-2); text-decoration: none; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; max-width: 182px;
+  }
+  .source-link:hover { color: var(--accent); text-decoration: underline; }
+  .source-note { font-size: 11px; margin-left: auto; white-space: nowrap; }
+
+  .notice-box {
+    font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 9px;
+    background: var(--amber-soft); color: #b54708; border: 1px solid #fedf89;
+  }
+  .error-banner {
+    position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 30;
+    padding: 10px 14px; border-radius: 10px; font-size: 12.5px;
+    background: var(--red-soft); color: #b42318; border: 1px solid #fecdca;
+    box-shadow: 0 6px 18px rgba(16, 24, 40, .12);
+  }
+  .error-banner[hidden] { display: none; }
+  .quit-screen { padding: 80px 24px; text-align: center; color: var(--text-2); }
 </style>
 </head>
 <body>
-<div class="container">
-  <header class="page-header">
-    <div>
-      <h1>Telegram 代理管理</h1>
-      <p class="subtitle">自动抓取 · 连通性测试 · 仅保留 Telegram 可用代理</p>
-    </div>
-    <span id="updated-at" class="muted">更新时间：--</span>
-  </header>
 
-  <section class="stats-grid">
-    <div class="stat-card stat-green">
-      <div class="stat-label">可用（TG 实测通过）</div>
-      <div class="stat-value" id="stat-available">0</div>
+<div class="app" id="app">
+  <!-- 左栏 -->
+  <aside class="col col-left">
+    <div class="brand">
+      <span class="brand-name">TGProxy</span>
+      <span class="brand-ver" id="app-version">v—</span>
     </div>
-    <div class="stat-card">
-      <div class="stat-label">未验证（MTProto）</div>
-      <div class="stat-value" id="stat-unverified">0</div>
-    </div>
-    <div class="stat-card stat-orange">
-      <div class="stat-label">TCP 通但 TG 不合格（含超慢）</div>
-      <div class="stat-value" id="stat-tg-failed">0</div>
-    </div>
-    <div class="stat-card stat-gray">
-      <div class="stat-label">不通已剔除</div>
-      <div class="stat-value" id="stat-dropped">0</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">已排除</div>
-      <div class="stat-value" id="stat-excluded">0</div>
-    </div>
-    <div class="stat-card stat-orange" title="连续 3 轮不通的节点自动拉黑 48 小时，跳过测试节省筛选时间">
-      <div class="stat-label">连败拉黑（跳过测试）</div>
-      <div class="stat-value" id="stat-blacklisted">0</div>
-    </div>
-  </section>
+    <div class="status-pill" id="status-pill"><span class="dot"></span><span id="status-text">空闲</span></div>
 
-  <div class="error-banner" id="error-banner" hidden></div>
-
-  <section class="toolbar">
-    <button id="refresh-btn" class="btn btn-primary" type="button">刷新</button>
-    <div class="interval-group">
-      <label for="interval-input">自动更新间隔（分钟）</label>
-      <input id="interval-input" type="number" min="1" max="1440" step="1" value="10">
-      <label for="tg-limit-input">TG 延迟上限（毫秒，超限剔除）</label>
-      <input id="tg-limit-input" type="number" min="500" max="60000" step="100" value="1000">
-      <label class="kg-switch"><input id="kg-enabled-input" type="checkbox" checked>
-        自动保存可用节点（known_good）</label>
-      <button id="save-interval-btn" class="btn" type="button">保存</button>
-      <span id="settings-msg" class="settings-msg"></span>
+    <div class="side-block">
+      <div class="side-label">可用节点</div>
+      <div class="big-num num" id="big-available">—</div>
+      <div class="big-sub" id="big-available-sub">等待首轮结果</div>
     </div>
-    <div class="toolbar-meta">
-      <span id="countdown" class="muted">下次自动更新：--</span>
-      <button id="exit-btn" class="btn" type="button" title="停止服务并退出程序">退出</button>
-    </div>
-  </section>
 
-  <section class="table-wrapper" id="table-wrapper">
-    <table>
-      <thead>
-        <tr>
-          <th>类型</th>
-          <th>代理地址</th>
-          <th>延迟</th>
-          <th>地区</th>
-          <th>ISP</th>
-          <th>入库时间</th>
-          <th>操作</th>
-        </tr>
-      </thead>
-      <tbody id="proxy-tbody">
-        <tr class="empty-row"><td colspan="7">正在加载…</td></tr>
-      </tbody>
-    </table>
-    <div class="loading-overlay" id="loading-overlay" hidden>
-      <span class="spinner"></span> 正在抓取并测试代理…
+    <div class="side-block">
+      <div class="kv"><span class="k">上轮耗时</span><span class="num" id="side-duration">—</span></div>
+      <div class="kv"><span class="k">本轮测数</span><span class="num" id="side-tested">—</span></div>
+      <div class="kv"><span class="k">更新时间</span><span class="num" id="side-updated">—</span></div>
     </div>
-  </section>
 
-  <footer class="page-footer">
-    <div class="muted source-caption">数据源（自动体检：连续 3 轮抓取失败或 0 产出会停用并从候选池补位；GitHub 直连失败时自动走 jsDelivr 镜像）：</div>
-    <div id="source-notice" class="source-notice" hidden></div>
-    <div id="source-urls" class="source-urls"><span class="muted">加载中…</span></div>
-  </footer>
+    <div class="spacer"></div>
+    <button class="btn btn-block" id="toggle-right" type="button">显示耗时明细</button>
+    <button class="btn btn-danger btn-block" id="exit-btn" type="button" title="停止服务并退出程序">退出程序</button>
+  </aside>
+
+  <!-- 中栏 -->
+  <main class="col col-main">
+    <section class="hero">
+      <div class="hero-top">
+        <span class="hero-title" id="hero-title">当前状态</span>
+        <span class="hero-title num" id="hero-countdown">下次自动更新：--</span>
+      </div>
+      <div class="hero-big">
+        <span class="n num" id="hero-available">—</span>
+        <span class="u">个可用节点</span>
+      </div>
+      <div class="hero-meta">
+        <div class="m"><b class="num" id="hero-tested">—</b><span>本轮测试</span></div>
+        <div class="m"><b class="num" id="hero-dropped">—</b><span>TCP 不通</span></div>
+        <div class="m"><b class="num" id="hero-tgfailed">—</b><span>TG 未过/超门槛</span></div>
+        <div class="m"><b class="num" id="hero-duration">—</b><span>上轮耗时</span></div>
+      </div>
+      <div class="hero-bar" id="hero-bar" hidden><i></i></div>
+    </section>
+
+    <div class="main-body">
+      <div class="toolbar">
+        <button id="refresh-btn" class="btn btn-primary" type="button">刷新</button>
+        <div class="field">
+          <label for="interval-input">间隔(分钟)</label>
+          <input id="interval-input" type="number" min="1" max="1440" step="1" value="10">
+        </div>
+        <div class="field">
+          <label for="tg-limit-input">TG 延迟上限(ms)</label>
+          <input id="tg-limit-input" type="number" min="500" max="60000" step="100" value="1000">
+        </div>
+        <label class="switch"><input id="kg-enabled-input" type="checkbox" checked> 沉淀可用节点</label>
+        <button id="save-interval-btn" class="btn" type="button">保存</button>
+        <span id="settings-msg" class="settings-msg"></span>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>类型</th><th>地址</th><th>延迟</th><th>地区</th><th>ISP</th><th>入库</th><th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="proxy-tbody"></tbody>
+        </table>
+        <div class="loading-overlay" id="loading-overlay" hidden>正在刷新…</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 右栏 -->
+  <aside class="col col-right">
+    <section>
+      <div class="panel-title"><span>上轮阶段耗时</span><span class="hint" id="stage-total">—</span></div>
+      <div id="stage-list"></div>
+    </section>
+
+    <section>
+      <div class="panel-title"><span>TG 两关分布</span><span class="hint" id="gate-total">—</span></div>
+      <div class="gate-list" id="gate-list"></div>
+    </section>
+
+    <section>
+      <div class="panel-title"><span>数据源</span><span class="hint" id="source-summary">—</span></div>
+      <div id="source-urls"></div>
+      <div id="source-notice" class="notice-box" style="margin-top:8px" hidden></div>
+    </section>
+  </aside>
 </div>
+
+<div class="error-banner" id="error-banner" hidden></div>
 
 <script>
 (function () {
   "use strict";
 
-  var POLL_INTERVAL_MS = 2500;
+  var POLL_MS = 2500;
   var state = { settings: null, nextRunAt: null, fetching: false };
-  // 已请求退出：停掉轮询，避免服务关掉后每 2.5s 抛一次网络错误
   var quitting = false;
 
   function $(id) { return document.getElementById(id); }
+
   var tbody = $("proxy-tbody");
   var refreshBtn = $("refresh-btn");
   var loadingOverlay = $("loading-overlay");
   var errorBanner = $("error-banner");
-  var countdownEl = $("countdown");
-  var updatedAtEl = $("updated-at");
   var settingsMsg = $("settings-msg");
 
   var COPY_ICON =
@@ -262,130 +392,154 @@
     });
   }
 
+  function fmtDuration(sec) {
+    if (sec == null || !isFinite(sec)) { return "—"; }
+    if (sec < 60) { return sec.toFixed(2) + " s"; }
+    var m = Math.floor(sec / 60);
+    return m + " 分 " + Math.round(sec % 60) + " 秒";
+  }
+
   function formatLatency(ms) {
     if (ms == null) { return { text: "—", cls: "lat-none" }; }
-    // TG 线路往返口径（与门槛/README 一致）：<1s 绿 / <3s 橙 / 更高红
     if (ms < 1000) { return { text: ms + " ms", cls: "lat-green" }; }
     if (ms < 3000) { return { text: ms + " ms", cls: "lat-orange" }; }
     return { text: ms + " ms", cls: "lat-red" };
   }
 
   function typeBadge(type) {
-    if (type === "mtproto") {
-      return '<span class="badge badge-mtproto">MTProto</span>';
-    }
+    if (type === "mtproto") { return '<span class="badge badge-mtproto">MTProto</span>'; }
     return '<span class="badge badge-socks5">SOCKS5</span>';
   }
 
+  /* ---------- 表格 ---------- */
   function renderProxies(proxies) {
     if (!proxies || !proxies.length) {
-      tbody.innerHTML =
-        '<tr class="empty-row"><td colspan="7">暂无可用代理，请点击「刷新」或等待自动更新</td></tr>';
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无可用代理，请点击「刷新」或等待自动更新</td></tr>';
       return;
     }
     var html = "";
     proxies.forEach(function (p) {
-      // 优先展示 TG 实测延迟（经代理访问 desktop.telegram.org 的往返耗时）
       var tgLat = p.tg_latency_ms;
-      var lat = (tgLat != null)
-        ? formatLatency(tgLat)
-        : formatLatency(p.latency_ms);
+      var lat = (tgLat != null) ? formatLatency(tgLat) : formatLatency(p.latency_ms);
       var latTitle = (tgLat != null) ? "TG 线路往返延迟" : "TCP 连接延迟";
-      var unverified = (p.tg_ok === null)
-        ? '<span class="badge badge-unavailable">未验证</span> ' : "";
+      var unverified = (p.tg_ok === null) ? '<span class="badge badge-unavailable">未验证</span> ' : "";
       html += "<tr>" +
         "<td>" + typeBadge(p.type) + "</td>" +
         '<td><button type="button" class="link-btn" data-link="' + escapeHtml(p.link) +
-          '" title="点击复制完整链接">' + escapeHtml(p.host + ":" + p.port) + COPY_ICON +
-        "</button></td>" +
+          '" title="点击复制完整链接">' + escapeHtml(p.host + ":" + p.port) + COPY_ICON + "</button></td>" +
         '<td>' + unverified + '<span class="lat ' + lat.cls + '" title="' + latTitle + '">' + lat.text + "</span></td>" +
         "<td>" + escapeHtml(p.location) + "</td>" +
         "<td>" + escapeHtml(p.isp) + "</td>" +
         "<td>" + escapeHtml(p.added_at) + "</td>" +
         '<td><button type="button" class="tg-btn" data-host="' + escapeHtml(p.host) +
-          '" data-port="' + escapeHtml(p.port) +
-          '" title="唤起 Telegram Desktop 打开添加代理窗口">添加到 Telegram</button></td>' +
+          '" data-port="' + escapeHtml(p.port) + '" title="唤起 Telegram Desktop 添加代理">添加到 Telegram</button></td>' +
         "</tr>";
     });
     tbody.innerHTML = html;
   }
 
-  function renderStats(stats) {
-    stats = stats || {};
-    $("stat-available").textContent = stats.available || 0;
-    $("stat-unverified").textContent = stats.unverified || 0;
-    $("stat-tg-failed").textContent = stats.tg_failed || 0;
-    $("stat-dropped").textContent = stats.dropped || 0;
-    $("stat-excluded").textContent = stats.excluded || 0;
-    $("stat-blacklisted").textContent = stats.blacklisted || 0;
+  /* ---------- 左栏 / Hero ---------- */
+  function renderSummary(data) {
+    var stats = data.stats || {};
+    var tested = (stats.available || 0) + (stats.unverified || 0) +
+                 (stats.tg_failed || 0) + (stats.dropped || 0);
+    var dur = (data.stage_durations && data.stage_durations.total) || null;
+    var updated = data.updated_at;
+
+    $("big-available").textContent = updated ? (stats.available || 0) : "—";
+    $("big-available-sub").textContent = updated
+      ? ("本轮测试 " + tested + " 个")
+      : "等待首轮结果";
+    $("side-duration").textContent = fmtDuration(dur);
+    $("side-tested").textContent = updated ? tested : "—";
+    $("side-updated").textContent = updated || "—";
+
+    $("hero-available").textContent = updated ? (stats.available || 0) : "—";
+    $("hero-tested").textContent = updated ? tested : "—";
+    $("hero-dropped").textContent = updated ? (stats.dropped || 0) : "—";
+    $("hero-tgfailed").textContent = updated ? (stats.tg_failed || 0) : "—";
+    $("hero-duration").textContent = dur == null ? "—" : dur.toFixed(1) + "s";
+
+    var fetching = !!data.fetching;
+    $("status-text").textContent = fetching ? "刷新中" : "空闲";
+    $("status-pill").className = "status-pill" + (fetching ? " running" : "");
+    $("hero-title").textContent = fetching ? "正在刷新（耗时明细在本轮结束后更新）" : "上轮结果";
+    $("hero-bar").hidden = !fetching;
   }
 
   function renderCountdown() {
-    if (state.nextRunAt == null) {
-      countdownEl.textContent = "下次自动更新：--";
-      return;
-    }
+    var el = $("hero-countdown");
+    if (state.nextRunAt == null) { el.textContent = "下次自动更新：--"; return; }
     var remain = Math.max(0, Math.round((state.nextRunAt - Date.now()) / 1000));
     var text = remain >= 60
       ? Math.floor(remain / 60) + " 分 " + (remain % 60) + " 秒"
       : remain + " 秒";
-    countdownEl.textContent = "下次自动更新：" + text;
+    el.textContent = "下次自动更新：" + text;
   }
 
-  function render(data) {
-    renderStats(data.stats);
-    renderProxies(data.proxies);
-    renderSources(data.sources);
-    renderNotice(data.notice);
-    updatedAtEl.textContent = "更新时间：" + (data.updated_at || "--");
-    if (data.error) {
-      errorBanner.textContent = data.error;
-      errorBanner.hidden = false;
-    } else {
-      errorBanner.hidden = true;
+  /* ---------- 右栏：阶段耗时 ---------- */
+  var STAGE_META = [
+    { key: "fetch",   label: "抓取",   cls: "c-fetch" },
+    { key: "prepare", label: "解析合并", cls: "c-prepare" },
+    { key: "tcp",     label: "TCP 预筛", cls: "c-tcp" },
+    { key: "tg",      label: "TG 实测",  cls: "c-tg" },
+    { key: "commit",  label: "汇总落盘", cls: "c-commit" }
+  ];
+
+  function renderStages(durations) {
+    var box = $("stage-list");
+    durations = durations || {};
+    var total = durations.total || 0;
+    $("stage-total").textContent = total ? fmtDuration(total) : "—";
+    if (!total) {
+      box.innerHTML = '<div class="muted" style="font-size:12px">暂无数据，跑完一轮后显示</div>';
+      return;
     }
-    state.fetching = !!data.fetching;
-    refreshBtn.disabled = state.fetching;
-    refreshBtn.textContent = state.fetching ? "刷新中…" : "刷新";
-    loadingOverlay.hidden = !state.fetching;
-    if (typeof data.next_run_in_sec === "number") {
-      state.nextRunAt = Date.now() + data.next_run_in_sec * 1000;
-      renderCountdown();
-    }
-  }
-
-  function poll() {
-    if (quitting) return;
-    fetchJson("/api/proxies")
-      .then(render)
-      .catch(function () { /* 服务未就绪时静默，下一轮重试 */ });
-  }
-
-  function setRefreshingUi(refreshing) {
-    refreshBtn.disabled = refreshing;
-    refreshBtn.textContent = refreshing ? "刷新中…" : "刷新";
-    loadingOverlay.hidden = !refreshing;
-  }
-
-  function refresh() {
-    setRefreshingUi(true);
-    fetchJson("/api/refresh", { method: "POST" }).catch(function () {
-      setRefreshingUi(false);
+    var html = "";
+    STAGE_META.forEach(function (s) {
+      var v = durations[s.key];
+      if (v == null) { return; }
+      var pct = total > 0 ? (v / total * 100) : 0;
+      html += '<div class="stage-row">' +
+        '<div class="stage-head"><span class="t">' + s.label + '</span>' +
+        '<span class="v">' + v.toFixed(2) + 's · ' + pct.toFixed(0) + '%</span></div>' +
+        '<div class="stage-track"><i class="' + s.cls + '" style="width:' +
+          Math.max(1, pct).toFixed(1) + '%"></i></div></div>';
     });
+    box.innerHTML = html;
   }
 
-  function loadSettings() {
-    fetchJson("/api/settings")
-      .then(function (data) {
-        state.settings = data;
-        $("interval-input").value = data.interval_minutes;
-        $("tg-limit-input").value = data.max_tg_latency_ms;
-        $("kg-enabled-input").checked = !!data.known_good_enabled;
-        renderSourceUrls(data.proxy_list_urls || []);
-      })
-      .catch(function () { /* 忽略，使用输入框默认值 */ });
+  /* ---------- 右栏：TG 两关分布 ---------- */
+  var GATE_META = [
+    { key: "dc_fail",          label: "连接 DC 失败", color: "#dc2626" },
+    { key: "latency_rejected", label: "超门槛（已剪枝）", color: "#d97706" },
+    { key: "web_fail",         label: "站点验证失败", color: "#7c3aed" },
+    { key: "ok",               label: "两关通过", color: "#16a34a" }
+  ];
+
+  function renderGates(g) {
+    var box = $("gate-list");
+    g = g || {};
+    $("gate-total").textContent = g.total ? (g.total + " 个节点") : "—";
+    if (!g.total) {
+      box.innerHTML = '<div class="muted" style="font-size:12px">暂无数据</div>';
+      return;
+    }
+    var html = "";
+    GATE_META.forEach(function (m) {
+      var item = g[m.key] || { count: 0 };
+      var p50 = item.dc_p50 != null ? item.dc_p50 + "ms" : "—";
+      html += '<div class="gate-row">' +
+        '<span class="swatch" style="background:' + m.color + '"></span>' +
+        '<span class="name">' + m.label + '</span>' +
+        '<span class="cnt">' + (item.count || 0) + '</span>' +
+        '<span class="p50" title="第一关往返中位数">' + p50 + '</span>' +
+        '</div>';
+    });
+    box.innerHTML = html;
   }
 
+  /* ---------- 右栏：数据源 ---------- */
   function renderSourceUrls(urls) {
     var box = $("source-urls");
     box.innerHTML = "";
@@ -411,30 +565,76 @@
     });
   }
 
-  function renderNotice(notice) {
-    var box = $("source-notice");
-    if (!box) { return; }
-    if (notice) {
-      box.textContent = notice;
-      box.hidden = false;
-    } else {
-      box.hidden = true;
-    }
-  }
-
   function renderSources(sources) {
+    var ok = 0;
     (sources || []).forEach(function (src, index) {
       var dot = $("source-dot-" + index);
       var note = $("source-note-" + index);
+      if (src.status === "ok") { ok += 1; }
       if (!dot || !note) { return; }
       if (src.status === "ok") {
         dot.style.background = "#16a34a";
-        note.textContent = "成功 " + src.kept + " 条" + (src.via_mirror ? " · 走镜像" : "");
+        note.textContent = src.kept + " 条" + (src.via_mirror ? " · 镜像" : "");
       } else {
         dot.style.background = "#dc2626";
-        note.textContent = "失败" + (src.error ? "：" + String(src.error).slice(0, 60) : "");
+        note.textContent = "失败";
+        note.title = src.error ? String(src.error).slice(0, 200) : "";
       }
     });
+    var total = (sources || []).length;
+    $("source-summary").textContent = total ? (ok + "/" + total + " 成功") : "—";
+  }
+
+  function renderNotice(notice) {
+    var box = $("source-notice");
+    if (notice) { box.textContent = notice; box.hidden = false; }
+    else { box.hidden = true; }
+  }
+
+  /* ---------- 主渲染 ---------- */
+  function render(data) {
+    renderSummary(data);
+    renderProxies(data.proxies);
+    renderSources(data.sources);
+    renderStages(data.stage_durations);
+    renderGates(data.tg_gate_stats);
+    renderNotice(data.notice);
+
+    if (data.error) { errorBanner.textContent = data.error; errorBanner.hidden = false; }
+    else { errorBanner.hidden = true; }
+
+    state.fetching = !!data.fetching;
+    setRefreshingUi(state.fetching);
+    if (typeof data.next_run_in_sec === "number") {
+      state.nextRunAt = Date.now() + data.next_run_in_sec * 1000;
+      renderCountdown();
+    }
+  }
+
+  function poll() {
+    if (quitting) { return; }
+    fetchJson("/api/proxies").then(render).catch(function () { /* 服务未就绪，下轮重试 */ });
+  }
+
+  function setRefreshingUi(refreshing) {
+    refreshBtn.disabled = refreshing;
+    refreshBtn.textContent = refreshing ? "刷新中…" : "刷新";
+    loadingOverlay.hidden = !refreshing;
+  }
+
+  function refresh() {
+    setRefreshingUi(true);
+    fetchJson("/api/refresh", { method: "POST" }).catch(function () { setRefreshingUi(false); });
+  }
+
+  function loadSettings() {
+    fetchJson("/api/settings").then(function (data) {
+      state.settings = data;
+      $("interval-input").value = data.interval_minutes;
+      $("tg-limit-input").value = data.max_tg_latency_ms;
+      $("kg-enabled-input").checked = !!data.known_good_enabled;
+      renderSourceUrls(data.proxy_list_urls || []);
+    }).catch(function () { /* 用输入框默认值 */ });
   }
 
   function saveSettings() {
@@ -453,25 +653,24 @@
     fetchJson("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ interval_minutes: value, max_tg_latency_ms: tgLimit,
-        known_good_enabled: $("kg-enabled-input").checked })
-    })
-      .then(function (data) {
-        if (data && data.ok) {
-          settingsMsg.style.color = "#16a34a";
-          settingsMsg.textContent = "已保存，立即生效";
-          if (data.settings) {
-            $("interval-input").value = data.settings.interval_minutes;
-          }
-        } else {
-          settingsMsg.style.color = "#dc2626";
-          settingsMsg.textContent = (data && data.error) || "保存失败";
-        }
+      body: JSON.stringify({
+        interval_minutes: value,
+        max_tg_latency_ms: tgLimit,
+        known_good_enabled: $("kg-enabled-input").checked
       })
-      .catch(function () {
+    }).then(function (data) {
+      if (data && data.ok) {
+        settingsMsg.style.color = "#16a34a";
+        settingsMsg.textContent = "已保存，立即生效";
+        if (data.settings) { $("interval-input").value = data.settings.interval_minutes; }
+      } else {
         settingsMsg.style.color = "#dc2626";
-        settingsMsg.textContent = "保存失败：网络错误";
-      });
+        settingsMsg.textContent = (data && data.error) || "保存失败";
+      }
+    }).catch(function () {
+      settingsMsg.style.color = "#dc2626";
+      settingsMsg.textContent = "保存失败：网络错误";
+    });
   }
 
   function fallbackCopy(text) {
@@ -490,89 +689,78 @@
 
   function copyText(text) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      return navigator.clipboard
-        .writeText(text)
+      return navigator.clipboard.writeText(text)
         .then(function () { return true; })
         .catch(function () { return fallbackCopy(text); });
     }
     return Promise.resolve(fallbackCopy(text));
   }
 
+  /* ---------- 事件 ---------- */
   tbody.addEventListener("click", function (event) {
     var btn = event.target.closest ? event.target.closest(".link-btn") : null;
     if (!btn) { return; }
     copyText(btn.getAttribute("data-link")).then(function (ok) {
-      var original = btn.innerHTML;
+      if (!ok) { return; }
       btn.classList.add("copied");
-      btn.innerHTML = ok ? "已复制" : "复制失败";
-      setTimeout(function () {
-        btn.innerHTML = original;
-        btn.classList.remove("copied");
-      }, 1500);
+      setTimeout(function () { btn.classList.remove("copied"); }, 1200);
     });
   });
 
   tbody.addEventListener("click", function (event) {
     var btn = event.target.closest ? event.target.closest(".tg-btn") : null;
-    if (!btn) { return; }
-    var original = btn.textContent;
+    if (!btn || btn.disabled) { return; }
     btn.disabled = true;
-    btn.textContent = "唤起中…";
     fetchJson("/api/open_telegram", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        host: btn.getAttribute("data-host"),
-        port: parseInt(btn.getAttribute("data-port"), 10)
-      })
-    })
-      .then(function (data) {
-        if (data && data.ok) {
-          btn.textContent = "已唤起 Telegram";
-        } else {
-          btn.textContent = (data && data.error) || "唤起失败";
-          btn.classList.add("tg-fail");
-        }
-        setTimeout(function () {
-          btn.textContent = original;
-          btn.disabled = false;
-          btn.classList.remove("tg-fail");
-        }, 2500);
-      })
-      .catch(function () {
-        btn.textContent = "唤起失败";
-        btn.classList.add("tg-fail");
-        setTimeout(function () {
-          btn.textContent = original;
-          btn.disabled = false;
-          btn.classList.remove("tg-fail");
-        }, 2500);
-      });
+      body: JSON.stringify({ host: btn.getAttribute("data-host"), port: btn.getAttribute("data-port") })
+    }).then(function (data) {
+      if (data && data.ok) {
+        btn.textContent = "已唤起 Telegram";
+      } else {
+        btn.textContent = (data && data.error) ? String(data.error).slice(0, 24) : "唤起失败";
+        setTimeout(function () { btn.textContent = "添加到 Telegram"; btn.disabled = false; }, 2500);
+      }
+    }).catch(function () {
+      btn.textContent = "唤起失败";
+      setTimeout(function () { btn.textContent = "添加到 Telegram"; btn.disabled = false; }, 2500);
+    });
   });
 
   refreshBtn.addEventListener("click", refresh);
   $("save-interval-btn").addEventListener("click", saveSettings);
 
-  // 退出：打包成无控制台后没有别的方式关掉进程，这个入口是必需项。
-  // 服务端先回响应再 shutdown，所以通常能拿到 200；拿不到也属正常（连接被重置）。
+  $("toggle-right").addEventListener("click", function () {
+    var app = $("app");
+    var shown = app.classList.toggle("show-right");
+    this.textContent = shown ? "隐藏耗时明细" : "显示耗时明细";
+  });
+
   $("exit-btn").addEventListener("click", function () {
-    if (!confirm("退出 tgproxy？服务会停止，下次需要重新双击启动。")) return;
+    if (!confirm("退出 TGProxy？服务会停止，下次需要重新双击启动。")) { return; }
     quitting = true;
     fetchJson("/api/shutdown", { method: "POST" })
       .catch(function () { return {}; })
       .then(function () {
         document.body.innerHTML =
-          '<div class="quit-screen">tgproxy 已退出，可以关闭此页面。</div>';
+          '<div class="quit-screen">TGProxy 已退出，可以关闭此页面。</div>';
       });
   });
+
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden) { poll(); }
   });
 
-  setInterval(poll, POLL_INTERVAL_MS);
-  setInterval(renderCountdown, 1000);
+  /* ---------- 启动 ---------- */
+  fetchJson("/api/version").then(function (v) {
+    $("app-version").textContent = "v" + (v && v.version ? v.version : "—");
+  }).catch(function () { $("app-version").textContent = "v—"; });
+
   loadSettings();
   poll();
+  setInterval(poll, POLL_MS);
+  setInterval(renderCountdown, 1000);
 })();
 </script>
 </body>
