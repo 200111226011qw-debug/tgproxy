@@ -4,13 +4,14 @@ import com.tgproxy.data.ProxyRepository
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType
+import com.tgproxy.model.TgVerdict
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * 排序对拍桌面版 sort_proxies（PRD §7-2 / ARCHITECTURE.md §7 T03）。
+ * 排序对拍桌面版 sort_proxies（PRD §7-2 / ARCHITECTURE.md §7 T03；v2.0 双闸版）。
  *
- * 排序三键：可用在前 → 延迟升序（null 排同组末尾）→ host → port。
+ * 排序键：TG 实测通过在前 → TG 延迟升序（null 排同组末尾）→ host → port。
  */
 class ProxySortTest {
 
@@ -19,7 +20,7 @@ class ProxySortTest {
     private fun entry(
         host: String,
         port: Int,
-        status: ProxyStatus,
+        tgVerdict: TgVerdict,
         latencyMs: Int?,
     ): ProxyEntry = ProxyEntry(
         link = "socks5://$host:$port",
@@ -27,15 +28,16 @@ class ProxySortTest {
         port = port,
         type = ProxyType.SOCKS5,
         latencyMs = latencyMs,
-        status = status,
+        status = if (tgVerdict == TgVerdict.PASS) ProxyStatus.AVAILABLE else ProxyStatus.UNAVAILABLE,
+        tgVerdict = tgVerdict,
     )
 
     @Test
-    fun `可用在前、同可用按延迟升序、不可用整体在后`() {
+    fun `TG 通过在前、同组按延迟升序、未通过整体在后`() {
         val input = listOf(
-            entry("2.0.0.1", 100, ProxyStatus.UNAVAILABLE, 50),
-            entry("1.0.0.1", 200, ProxyStatus.AVAILABLE, 100),
-            entry("1.0.0.2", 300, ProxyStatus.AVAILABLE, 300),
+            entry("2.0.0.1", 100, TgVerdict.FAIL, 50),
+            entry("1.0.0.1", 200, TgVerdict.PASS, 100),
+            entry("1.0.0.2", 300, TgVerdict.PASS, 300),
         )
 
         val sorted = repository.sortProxies(input)
@@ -47,22 +49,42 @@ class ProxySortTest {
     }
 
     @Test
-    fun `latency 为 null 排在同组末尾`() {
+    fun `未验证（MTProto）排在 TG 通过组之后`() {
         val input = listOf(
-            entry("3.0.0.1", 300, ProxyStatus.AVAILABLE, null),
-            entry("1.0.0.1", 100, ProxyStatus.AVAILABLE, 200),
-            entry("2.0.0.1", 200, ProxyStatus.UNAVAILABLE, null),
-            entry("4.0.0.1", 400, ProxyStatus.UNAVAILABLE, 30),
+            entry("3.0.0.1", 300, TgVerdict.UNVERIFIED, null),
+            entry("1.0.0.1", 100, TgVerdict.PASS, 200),
+            entry("2.0.0.1", 200, TgVerdict.FAIL, null),
         )
 
         val sorted = repository.sortProxies(input)
 
         assertEquals(
             listOf(
-                "socks5://1.0.0.1:100", // 可用组：有延迟在前
-                "socks5://3.0.0.1:300", // 可用组：null 在末尾
-                "socks5://4.0.0.1:400", // 不可用组：有延迟在前
-                "socks5://2.0.0.1:200", // 不可用组：null 在末尾
+                "socks5://1.0.0.1:100", // PASS 组
+                "socks5://2.0.0.1:200", // FAIL（有延迟/null 同按规则）
+                "socks5://3.0.0.1:300", // UNVERIFIED 组末尾
+            ),
+            sorted.map { it.link },
+        )
+    }
+
+    @Test
+    fun `latency 为 null 排在同组末尾`() {
+        val input = listOf(
+            entry("3.0.0.1", 300, TgVerdict.PASS, null),
+            entry("1.0.0.1", 100, TgVerdict.PASS, 200),
+            entry("2.0.0.1", 200, TgVerdict.FAIL, null),
+            entry("4.0.0.1", 400, TgVerdict.FAIL, 30),
+        )
+
+        val sorted = repository.sortProxies(input)
+
+        assertEquals(
+            listOf(
+                "socks5://1.0.0.1:100", // PASS 组：有延迟在前
+                "socks5://3.0.0.1:300", // PASS 组：null 在末尾
+                "socks5://4.0.0.1:400", // FAIL 组：有延迟在前
+                "socks5://2.0.0.1:200", // FAIL 组：null 在末尾
             ),
             sorted.map { it.link },
         )
@@ -71,9 +93,9 @@ class ProxySortTest {
     @Test
     fun `延迟相同按 host 再按 port 兜底排序`() {
         val input = listOf(
-            entry("1.0.0.1", 200, ProxyStatus.AVAILABLE, 100),
-            entry("1.0.0.0", 100, ProxyStatus.AVAILABLE, 100),
-            entry("1.0.0.0", 50, ProxyStatus.AVAILABLE, 100),
+            entry("1.0.0.1", 200, TgVerdict.PASS, 100),
+            entry("1.0.0.0", 100, TgVerdict.PASS, 100),
+            entry("1.0.0.0", 50, TgVerdict.PASS, 100),
         )
 
         val sorted = repository.sortProxies(input)
@@ -91,8 +113,8 @@ class ProxySortTest {
     @Test
     fun `排序返回新列表且不修改入参`() {
         val input = listOf(
-            entry("2.0.0.1", 100, ProxyStatus.UNAVAILABLE, 50),
-            entry("1.0.0.1", 200, ProxyStatus.AVAILABLE, 100),
+            entry("2.0.0.1", 100, TgVerdict.FAIL, 50),
+            entry("1.0.0.1", 200, TgVerdict.PASS, 100),
         )
         val snapshot = input.map { it.link }
 

@@ -2,33 +2,29 @@ package com.tgproxy.ui.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material3.AlertDialog
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,309 +33,244 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType
+import com.tgproxy.model.TgVerdict
 import com.tgproxy.ui.theme.MonoLinkStyle
-import com.tgproxy.ui.theme.Primary
-import com.tgproxy.ui.theme.SuccessGreen
+import com.tgproxy.ui.theme.TgBlue
 import com.tgproxy.ui.theme.TgProxyTheme
 
-/**
- * 代理列表区（对应桌面版 table-wrapper）：下拉刷新 + LazyColumn 卡片行 + 空态 + loading 遮罩。
- *
- * - 刷新中显示遮罩「正在抓取并测试代理…」（与桌面版 loading-overlay 一致）；
- * - 下拉刷新与按钮刷新共用 ViewModel 的互斥（Mutex.tryLock），刷新中再次触发直接忽略；
- * - 行点击 SOCKS5 复制 / MTProto 跳转（由调用方处理）；长按弹出「复制/分享」菜单；
- * - 不可用行整体降透明度 0.6（桌面版灰徽章的等价表达）。
- *
- * @param proxies 已排序列表
- * @param fetching 是否刷新中
- * @param copiedLink 当前处于「已复制」图标态的链接（1.5s 后由调用方清除）
- * @param onRefresh 下拉刷新回调
- * @param onRowClick 行点击回调
- * @param onCopy 长按菜单「复制链接」回调
- * @param onShare 长按菜单「分享链接」回调
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ProxyListSection(
-    proxies: List<ProxyEntry>,
-    fetching: Boolean,
-    copiedLink: String?,
-    onRefresh: () -> Unit,
-    onRowClick: (ProxyEntry) -> Unit,
-    onCopy: (ProxyEntry) -> Unit,
-    onShare: (ProxyEntry) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var menuEntry by remember { mutableStateOf<ProxyEntry?>(null) }
-
-    PullToRefreshBox(
-        isRefreshing = fetching,
-        onRefresh = onRefresh,
-        modifier = modifier,
-    ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            if (proxies.isEmpty()) {
-                EmptyState(modifier = Modifier.fillMaxSize())
-            } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(
-                        items = proxies,
-                        key = { it.link },
-                        contentType = { it.type },
-                    ) { entry ->
-                        ProxyRow(
-                            entry = entry,
-                            copied = copiedLink == entry.link,
-                            onClick = { onRowClick(entry) },
-                            onLongClick = { menuEntry = entry },
-                        )
-                    }
-                }
-            }
-            if (fetching) {
-                LoadingOverlay()
-            }
-        }
-    }
-
-    val entry = menuEntry
-    if (entry != null) {
-        AlertDialog(
-            onDismissRequest = { menuEntry = null },
-            title = {
-                Text(
-                    text = entry.link,
-                    style = MonoLinkStyle,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        menuEntry = null
-                        onCopy(entry)
-                    },
-                ) {
-                    Text("复制链接")
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        menuEntry = null
-                        onShare(entry)
-                    },
-                ) {
-                    Text("分享链接")
-                }
-            },
-        )
-    }
-}
+/** 「使用」按钮渐变（TG 蓝 → 青，与 Hero 大卡同源）。 */
+private val UseButtonGradient = Brush.linearGradient(listOf(TgBlue, Color(0xFF00C2E0)))
 
 /**
- * 代理卡片行（对应桌面版表格 7 列的手机化重构，PRD 5.1）。
+ * 代理卡片行（v2.1.0 列表优先 + 仪表盘视觉）。
  *
- * 行结构：徽章 + 链接（等宽）→ 延迟（着色）→ 地区 · ISP → 入库时间。
+ * 结构：左侧 4dp 延迟色条（扫视即知状态）→ 主体（host:port 等宽粗体 +
+ * 类型 · 地区 · ISP 元信息）→ 延迟胶囊 + 渐变「使用」主按钮（tg:// 深链，
+ * 48dp 触控）+ 圆底复制按钮。
+ *
+ * - 整卡点击 = 使用（唤起 Telegram「添加代理」）；长按 = 复制/分享菜单；
+ * - known_good 先行展示的旧条目（未复测）降透明度 + 延迟胶囊显示「未测」；
+ * - 「使用」按钮与整卡点击同入口；复制按钮点击不透传到卡片（自带拦截）。
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ProxyRow(
+fun ProxyRowCard(
     entry: ProxyEntry,
     copied: Boolean,
-    onClick: () -> Unit,
+    onUse: () -> Unit,
     onLongClick: () -> Unit,
+    onCopy: () -> Unit,
+    onShare: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val unavailable = entry.status == ProxyStatus.UNAVAILABLE
+    // known_good 启动展示的旧条目未经过本轮 TG 实测（PASS 之外的都降透明度）
+    val unverified = entry.tgVerdict != TgVerdict.PASS
     Surface(
         modifier = modifier
             .fillMaxWidth()
-            .alpha(if (unavailable) 0.6f else 1f),
-        shape = RoundedCornerShape(10.dp),
+            .alpha(if (unverified) 0.6f else 1f),
+        shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
     ) {
-        Column(
+        Row(
             modifier = Modifier
-                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .combinedClickable(onClick = onUse, onLongClick = onLongClick)
+                .height(64.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 第一行：状态徽章 + 类型徽章 + 链接（等宽字体，可复制）
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusBadge(status = entry.status)
-                Spacer(modifier = Modifier.width(6.dp))
-                TypeBadge(type = entry.type)
-                Spacer(modifier = Modifier.width(10.dp))
+            // 左侧延迟色条（<1000 绿 / <3000 橙 / 其余红 / 未测 灰）
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .fillMaxHeight()
+                    .background(latencyColor(entry.latencyMs)),
+            )
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${entry.host}:${entry.port}",
+                        style = MonoLinkStyle.copy(
+                            fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                        ),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (unverified) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "未复测",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
                 Text(
-                    text = entry.link,
-                    style = MonoLinkStyle,
-                    color = if (copied) SuccessGreen else Primary,
-                    maxLines = 2,
+                    text = rowMetaText(entry),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
                 )
-                if (copied) {
-                    Spacer(modifier = Modifier.width(4.dp))
+            }
+            LatencyPill(latencyMs = entry.latencyMs)
+            // 「使用」主按钮：TG 蓝 → 青渐变填充，48dp 触控区
+            Box(
+                modifier = Modifier
+                    .padding(start = 8.dp)
+                    .size(width = 68.dp, height = 48.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(UseButtonGradient)
+                    .clickable(onClick = onUse),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
-                        imageVector = Icons.Filled.Check,
+                        imageVector = Icons.Filled.Bolt,
                         contentDescription = null,
-                        tint = SuccessGreen,
-                        modifier = Modifier.size(14.dp),
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Text(
+                        text = if (copied) "已复制" else "使用",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
                     )
                 }
             }
-
-            // 第二行：延迟（<200 绿 / <600 橙 / ≥600 红 / 失败 灰）
-            LatencyText(latencyMs = entry.latencyMs)
-
-            // 第三行：地区 · ISP（均有值才展示，避免空行占位）
-            val meta = when {
-                entry.location.isNotEmpty() && entry.isp.isNotEmpty() ->
-                    "${entry.location} · ${entry.isp}"
-                entry.location.isNotEmpty() -> entry.location
-                entry.isp.isNotEmpty() -> entry.isp
-                else -> ""
-            }
-            if (meta.isNotEmpty()) {
-                Text(
-                    text = meta,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-
-            // 第四行：入库时间（次要色）
-            if (entry.addedAt.isNotEmpty()) {
-                Text(
-                    text = "入库时间：${entry.addedAt}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // 圆底复制按钮（次要操作，40dp）
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 8.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                    .clickable(onClick = onCopy),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.ContentCopy,
+                    contentDescription = "复制链接",
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
     }
 }
 
-/** 空态文案（与桌面版一致）。 */
+/** 元信息行文本：类型 · 地区 · ISP。 */
+internal fun rowMetaText(entry: ProxyEntry): String {
+    val parts = mutableListOf(entry.type.name)
+    if (entry.location.isNotEmpty()) parts.add(entry.location)
+    if (entry.isp.isNotEmpty()) parts.add(entry.isp)
+    return parts.joinToString(" · ")
+}
+
+/** 延迟胶囊：着色档位与 [latencyColor] 一致；无延迟显示「未测」。数字等宽增强可信度。 */
 @Composable
-private fun EmptyState(modifier: Modifier = Modifier) {
-    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+fun LatencyPill(latencyMs: Int?, modifier: Modifier = Modifier) {
+    val color = latencyColor(latencyMs)
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(999.dp),
+        color = color.copy(alpha = 0.14f),
+        contentColor = color,
+    ) {
         Text(
-            text = "暂无数据，请点击「刷新」或等待自动更新",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = latencyMs?.let { "$it ms" } ?: "未测",
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         )
     }
 }
 
-/** loading 遮罩：「正在抓取并测试代理…」（与桌面版 loading-overlay 一致）。 */
+/** 长按菜单（复制/分享）。由列表方持有状态并展示。 */
 @Composable
-private fun LoadingOverlay() {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.75f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 4.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = "正在抓取并测试代理…",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-            }
-        }
-    }
+fun ProxyActionDialog(
+    entry: ProxyEntry?,
+    onDismiss: () -> Unit,
+    onCopy: (ProxyEntry) -> Unit,
+    onShare: (ProxyEntry) -> Unit,
+) {
+    if (entry == null) return
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = entry.link,
+                style = MonoLinkStyle,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onDismiss(); onCopy(entry) }) { Text("复制链接") }
+        },
+        dismissButton = {
+            TextButton(onClick = { onDismiss(); onShare(entry) }) { Text("分享链接") }
+        },
+    )
 }
 
 @Preview(showBackground = true, widthDp = 380)
 @Composable
-private fun ProxyListPreview() {
+private fun ProxyRowCardPreview() {
     TgProxyTheme {
-        Surface(color = MaterialTheme.colorScheme.background) {
-            ProxyListSection(
-                proxies = listOf(
-                    ProxyEntry(
-                        link = "socks5://1.2.3.4:1080",
-                        host = "1.2.3.4",
-                        port = 1080,
-                        type = ProxyType.SOCKS5,
-                        latencyMs = 120,
-                        status = ProxyStatus.AVAILABLE,
-                        location = "荷兰 北荷兰省 阿姆斯特丹",
-                        isp = "DigitalOcean",
-                        addedAt = "10-21 22:58",
-                    ),
-                    ProxyEntry(
-                        link = "tg://proxy?server=5.6.7.8&port=443&secret=abcdef",
-                        host = "5.6.7.8",
-                        port = 443,
-                        type = ProxyType.MTPROTO,
-                        latencyMs = null,
-                        status = ProxyStatus.UNAVAILABLE,
-                        location = "日本",
-                        isp = "IIJ",
-                        addedAt = "10-21 23:10",
-                    ),
+        Column(modifier = Modifier.padding(12.dp)) {
+            ProxyRowCard(
+                entry = ProxyEntry(
+                    link = "socks5://1.2.3.4:1080",
+                    host = "1.2.3.4",
+                    port = 1080,
+                    type = ProxyType.SOCKS5,
+                    latencyMs = 387,
+                    status = ProxyStatus.AVAILABLE,
+                    tgVerdict = TgVerdict.PASS,
+                    location = "香港",
+                    isp = "HGC",
                 ),
-                fetching = false,
-                copiedLink = null,
-                onRefresh = {},
-                onRowClick = {},
+                copied = false,
+                onUse = {},
+                onLongClick = {},
                 onCopy = {},
                 onShare = {},
-                modifier = Modifier.padding(16.dp),
             )
-        }
-    }
-}
-
-@Preview(showBackground = true, widthDp = 380)
-@Composable
-private fun ProxyRowPreview() {
-    TgProxyTheme {
-        Surface(color = MaterialTheme.colorScheme.background) {
-            Box(modifier = Modifier.padding(16.dp)) {
-                ProxyRow(
-                    entry = ProxyEntry(
-                        link = "socks5://1.2.3.4:1080",
-                        host = "1.2.3.4",
-                        port = 1080,
-                        type = ProxyType.SOCKS5,
-                        latencyMs = 350,
-                        status = ProxyStatus.AVAILABLE,
-                        location = "香港",
-                        isp = "HGC",
-                        addedAt = "10-21 22:58",
-                    ),
-                    copied = true,
-                    onClick = {},
-                    onLongClick = {},
-                )
-            }
+            Spacer(modifier = Modifier.height(8.dp))
+            ProxyRowCard(
+                entry = ProxyEntry(
+                    link = "socks5://5.6.7.8:1080",
+                    host = "5.6.7.8",
+                    port = 1080,
+                    type = ProxyType.SOCKS5,
+                    latencyMs = null,
+                    status = ProxyStatus.UNAVAILABLE,
+                    tgVerdict = TgVerdict.UNVERIFIED,
+                    location = "日本",
+                ),
+                copied = true,
+                onUse = {},
+                onLongClick = {},
+                onCopy = {},
+                onShare = {},
+            )
         }
     }
 }

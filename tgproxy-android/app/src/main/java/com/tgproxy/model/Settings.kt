@@ -11,11 +11,13 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
  * @property intervalMinutes 自动更新间隔（分钟，默认 10）
  * @property proxyListUrl 数据源地址
  * @property themeMode 主题模式
+ * @property knownGoodEnabled known_good 沉淀开关（默认开，等价桌面版 v1.8.0）
  */
 data class Settings(
     val intervalMinutes: Int = Constants.DEFAULT_INTERVAL_MINUTES,
     val proxyListUrl: String = Constants.DEFAULT_PROXY_LIST_URL,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val knownGoodEnabled: Boolean = true,
 )
 
 /**

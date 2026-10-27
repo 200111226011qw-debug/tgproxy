@@ -3,30 +3,53 @@ package com.tgproxy.data
 import com.tgproxy.Constants
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
+import com.tgproxy.model.ProxyType
+import com.tgproxy.model.RefreshProgress
+import com.tgproxy.model.RefreshStage
 import com.tgproxy.model.Stats
+import com.tgproxy.model.TgVerdict
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 
 /**
- * 代理刷新管线编排：fetch → parse → test → stats（等价桌面版 ProxyManager._run_refresh）。
+ * 代理刷新管线编排（等价桌面版 ProxyManager._run_refresh 全流程）：
  *
- * 纯 Kotlin 无 Android 依赖，可被 JVM 单测直接构造，也可被 P2 的 WorkManager 复用。
+ * 并发抓取 → 逐源解析/去重/抽样 → known_good 优先补入 → 连续失败拉黑跳过 →
+ * TCP 预筛（并发）→ TG 实测两关（仅 SOCKS5，经代理到 TG DC + 全链路站点）→
+ * 1000ms 门槛 → 五项统计（available+unverified+tgFailed+overThreshold+dropped=tested）→
+ * known_good 沉淀 + 连败计数沉淀。
+ *
+ * 纯 Kotlin 无 Android 依赖（OkHttp 抓取器由构造注入），可被 JVM 单测直接构造。
  * 本类不做刷新互斥（互斥只在 ViewModel，见 ARCHITECTURE.md §8）。
  */
 class ProxyRepository(
     private val source: ProxySource,
     private val tester: LatencyTester = ProxyTester(),
+    private val tgGate: TelegramGateCaller = DefaultTelegramGateCaller,
+    private val knownGood: KnownGoodStore = KnownGoodStore.none(),
+    private val knownBad: KnownBadStore = KnownBadStore(file = null),
+    private val tgLatencyLimitMs: Int = Constants.TG_LATENCY_LIMIT_MS,
+    /** 阻塞测试的执行调度器（JVM 单测注入测试调度器避免跨线程派发竞态）。 */
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
 
     /** 一轮刷新的结果：永不抛异常，失败转为 [Failure]。 */
     sealed interface RefreshResult {
-        /** 成功：[entries] 为测试后（未排序）列表，[stats] 四项统计，[updatedAt] 本地时间文本。 */
+        /**
+         * 成功：[entries] 为最终保留列表（TG 实测通过且 ≤ 门槛，未排序），
+         * [stats] 五项统计，[updatedAt] 本地时间文本，[keptKnownGood] 是否有 known_good 兜底。
+         */
         data class Success(
             val entries: List<ProxyEntry>,
             val stats: Stats,
@@ -39,25 +62,25 @@ class ProxyRepository(
 
     /**
      * 执行一轮刷新（单源便捷入口，等价 [refresh] 传入单元素列表）。
-     *
-     * @param proxyListUrl 数据源地址
-     * @return Success / Failure；抓取或测试阶段的任何异常都转为 Failure（协程取消除外）
      */
     suspend fun refresh(proxyListUrl: String): RefreshResult =
         refresh(listOf(proxyListUrl))
 
     /**
-     * 执行一轮多源刷新：并发抓取全部数据源 -> 合并去重 -> 抽样 -> 测试。
-     *
-     * 与桌面版 _run_refresh 一致：部分源失败不影响整体；全部失败才转为 Failure，
-     * 错误消息保留首个底层异常文本（兼容既有「抓取代理列表失败：<原因>」契约）。
+     * 执行一轮多源刷新（全流程见类注释）。
      *
      * @param proxyListUrls 数据源地址列表（自动去重并截断至 Constants.FETCH_MAX_SOURCES）
+     * @param onProgress 阶段进度回调（抓取逐源 / TCP 与 TG 逐条）；默认无操作
      * @return Success / Failure（协程取消除外）
      */
-    suspend fun refresh(proxyListUrls: List<String>): RefreshResult = try {
+    suspend fun refresh(
+        proxyListUrls: List<String>,
+        onProgress: (RefreshProgress) -> Unit = {},
+    ): RefreshResult = try {
         val urls = proxyListUrls.distinct().take(Constants.FETCH_MAX_SOURCES)
-        val texts = fetchAll(urls)
+        val texts = fetchAll(urls) { done -> onProgress(RefreshProgress(RefreshStage.FETCH, done, urls.size)) }
+        onProgress(RefreshProgress(RefreshStage.FETCH, urls.size, urls.size))
+
         val merged = mutableListOf<ProxyEntry>()
         val seenKept = HashSet<Pair<String, Int>>()
         var excludedCount = 0
@@ -73,17 +96,77 @@ class ProxyRepository(
                 merged.add(entry)
             }
         }
-        val tested = tester.testAll(sampled(merged, Constants.MAX_TOTAL))
-        // 与桌面版一致：只保留可用的代理，不通的直接剔除（跟随源池每轮自动更新）
-        val availableList = tested.filter { it.status == ProxyStatus.AVAILABLE }
+
+        // known_good 优先补入（不在池子里也补），并返回优先保留键集
+        val preferredKeys = mergeKnownGood(merged, seenKept)
+
+        // 全局抽样至 MAX_TOTAL：preferred 优先保留，其余随机
+        val sampledTotal = samplePreferred(merged, preferredKeys, Constants.MAX_TOTAL)
+
+        // 连续失败拉黑跳过：黑名单节点不参与本轮测试（48 小时后自动解封重测）
+        knownBad.load()
+        val toTest = sampledTotal.filter { !knownBad.isBlacklisted(it.host, it.port) }
+        val blacklisted = sampledTotal.size - toTest.size
+
+        // 第一阶段：TCP 预筛（并发）
+        val tested = tester.testAll(toTest) { done, total ->
+            onProgress(RefreshProgress(RefreshStage.TCP_TEST, done, total))
+        }
+        val tcpOk = tested.filter { it.status == ProxyStatus.AVAILABLE }
+        // TCP 不通 → 连败 +1；通过则留到 TG 阶段判定
+        for (item in tested) {
+            if (item.status != ProxyStatus.AVAILABLE) {
+                knownBad.recordFailure(item.host, item.port)
+            }
+        }
+
+        // 第二阶段：TG 实测两关（仅 SOCKS5；MTProto 标记未验证）
+        val verified = testTelegramEntries(tcpOk) { done, total ->
+            onProgress(RefreshProgress(RefreshStage.TG_TEST, done, total))
+        }
+
+        // TG 两关通过且延迟 ≤ 门槛才保留；两关失败与超门槛分开计数（空态可解释）
+        val kept = mutableListOf<ProxyEntry>()
+        var unverified = 0
+        var tgFailed = 0
+        var overThreshold = 0
+        for (item in verified) {
+            when (item.tgVerdict) {
+                TgVerdict.UNVERIFIED -> unverified++
+                TgVerdict.FAIL -> tgFailed++
+                TgVerdict.PASS -> {
+                    val latency = item.latencyMs
+                    if (latency != null && latency <= tgLatencyLimitMs) {
+                        kept.add(item)
+                    } else {
+                        overThreshold++
+                    }
+                }
+            }
+        }
         val stats = Stats(
-            available = availableList.size,
-            dropped = tested.size - availableList.size,
-            // 与桌面版一致：已排除 = 非 Telegram 类型合法条目 + 非法行
+            available = kept.size,
+            unverified = unverified,
+            tgFailed = tgFailed,
+            overThreshold = overThreshold,
+            dropped = tested.size - tcpOk.size,
             excluded = excludedCount + droppedCount,
+            blacklisted = blacklisted,
             tested = tested.size,
         )
-        RefreshResult.Success(availableList, stats, nowText())
+        // TG 结论沉淀连败计数：两关通过（含超门槛）清零，未过 +1；轮末一次落盘
+        for (item in verified) {
+            when (item.tgVerdict) {
+                TgVerdict.PASS -> knownBad.recordSuccess(item.host, item.port)
+                TgVerdict.FAIL -> knownBad.recordFailure(item.host, item.port)
+                TgVerdict.UNVERIFIED -> Unit
+            }
+        }
+        knownBad.persist()
+        val result = RefreshResult.Success(kept, stats, nowText())
+        // 沉淀本轮验证通过的节点（开关关闭时不写）；失败静默（下轮再试）
+        knownGood.save(kept)
+        result
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
@@ -92,9 +175,14 @@ class ProxyRepository(
 
     /**
      * 并发抓取全部数据源；单个源失败降级为跳过，全部失败时抛出首个底层异常。
+     * 每完成一个源回调一次（无论成败）。
      */
-    private suspend fun fetchAll(urls: List<String>): List<String> = coroutineScope {
+    private suspend fun fetchAll(
+        urls: List<String>,
+        onOneDone: (Int) -> Unit,
+    ): List<String> = coroutineScope {
         var firstError: Exception? = null
+        val counter = java.util.concurrent.atomic.AtomicInteger()
         val ok = urls.map { url ->
             async {
                 try {
@@ -104,6 +192,8 @@ class ProxyRepository(
                 } catch (e: Exception) {
                     if (firstError == null) firstError = e
                     null
+                } finally {
+                    onOneDone(counter.incrementAndGet())
                 }
             }
         }.awaitAll().filterNotNull()
@@ -113,13 +203,93 @@ class ProxyRepository(
         ok
     }
 
+    /**
+     * known_good 补入：上轮验证通过但不在本轮候选里的节点补回候选，
+     * 返回优先保留键集（抽样时优先保留，等价桌面版 _merge_known_good）。
+     * 开关关闭时不读取、不补入。
+     */
+    private fun mergeKnownGood(merged: MutableList<ProxyEntry>, seen: MutableSet<Pair<String, Int>>): Set<Pair<String, Int>> {
+        if (!knownGood.enabled) return emptySet()
+        val preferred = HashSet<Pair<String, Int>>()
+        for (entry in knownGood.load()) {
+            preferred.add(entry.host to entry.port)
+            if ((entry.host to entry.port) !in seen) {
+                seen.add(entry.host to entry.port)
+                merged.add(entry)
+            }
+        }
+        return preferred
+    }
+
+    /** 超上限抽样：preferred 全保留，其余随机补足（等价桌面版 preferred+random.sample）。 */
+    private fun samplePreferred(
+        merged: List<ProxyEntry>,
+        preferred: Set<Pair<String, Int>>,
+        limit: Int,
+    ): List<ProxyEntry> {
+        if (merged.size <= limit) return merged
+        val keep = merged.filter { (it.host to it.port) in preferred }
+        val pool = merged.filter { (it.host to it.port) !in preferred }.shuffled()
+        return keep + pool.take((limit - keep.size).coerceAtLeast(0))
+    }
+
+    /**
+     * 并发 TG 实测（等价桌面版 _test_telegram_entries）：
+     * 每节点一条线程内先 DC 后站点串行两关（避免对同一免费代理同时开两条连接触发限流的假失败）；
+     * 仅 SOCKS5 参与；MTProto 标记 UNVERIFIED。
+     */
+    private suspend fun testTelegramEntries(
+        entries: List<ProxyEntry>,
+        onProgress: (Int, Int) -> Unit,
+    ): List<ProxyEntry> {
+        val socks5Count = entries.count { it.type == ProxyType.SOCKS5 }
+        val done = java.util.concurrent.atomic.AtomicInteger()
+        val semaphore = Semaphore(Constants.TG_TEST_MAX_CONCURRENCY)
+        return withContext(ioDispatcher) {
+            coroutineScope {
+                entries.map { entry ->
+                    if (entry.type != ProxyType.SOCKS5) {
+                        // 未参与 SOCKS5 实测的（MTProto）标记为未验证，不计入 TG 进度
+                        async { entry.copy(tgVerdict = TgVerdict.UNVERIFIED, latencyMs = null) }
+                    } else {
+                        async {
+                            semaphore.withPermit {
+                                val latency = try {
+                                    tgGate.test(entry.host, entry.port)
+                                } catch (e: Exception) {
+                                    null
+                                }
+                                val verdict = if (latency != null) TgVerdict.PASS else TgVerdict.FAIL
+                                entry.copy(
+                                    latencyMs = latency,
+                                    tgVerdict = verdict,
+                                    status = if (latency != null) ProxyStatus.AVAILABLE else ProxyStatus.UNAVAILABLE,
+                                )
+                            }.also {
+                                onProgress(done.incrementAndGet(), socks5Count)
+                            }
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+    }
+
+    /** known_good 开关同步（设置流首帧与切换时调用；立即生效）。 */
+    fun setKnownGoodEnabled(value: Boolean) {
+        knownGood.enabled = value
+    }
+
+    /** 读取 known_good 沉淀（启动先行展示用；开关关闭恒空）。 */
+    fun loadKnownGood(): List<ProxyEntry> = knownGood.load()
+
     /** 条目数超上限时随机抽样（等价桌面版 random.sample）。 */
     private fun <T> sampled(entries: List<T>, limit: Int): List<T> =
         if (entries.size <= limit) entries else entries.shuffled().take(limit)
 
     /**
-     * 排序：可用在前（0/1）→ 延迟升序（null 视为无穷大排末尾）→ host → port。
-     * 返回新列表，不修改入参（等价桌面版 sort_proxies）。
+     * 排序：TG 实测通过的在前按 TG 延迟升序，未验证的（MTProto）分组在后
+     * （等价桌面版 sort_proxies）。
      */
     fun sortProxies(proxies: List<ProxyEntry>): List<ProxyEntry> =
         proxies.sortedWith(PROXY_COMPARATOR)
@@ -131,7 +301,7 @@ class ProxyRepository(
     companion object {
         /** 排序比较器唯一来源（ARCHITECTURE.md §8）。 */
         val PROXY_COMPARATOR: Comparator<ProxyEntry> = compareBy(
-            { entry -> if (entry.status == ProxyStatus.AVAILABLE) 0 else 1 },
+            { entry -> if (entry.tgVerdict == TgVerdict.PASS) 0 else 1 },
             { entry -> entry.latencyMs?.toLong() ?: Long.MAX_VALUE },
             { entry -> entry.host },
             { entry -> entry.port },

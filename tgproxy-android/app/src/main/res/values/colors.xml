@@ -2,6 +2,6 @@
 <resources>
     <!-- 与桌面版 body 背景一致（#F4F6FA），用于窗口背景防冷启动闪白 -->
     <color name="page_background">#F4F6FA</color>
-    <!-- 启动图标背景色，与桌面版主色一致（#2563EB） -->
-    <color name="ic_launcher_background">#2563EB</color>
+    <!-- 启动图标背景色，Telegram 深色（#17212B） -->
+    <color name="ic_launcher_background">#17212B</color>
 </resources>

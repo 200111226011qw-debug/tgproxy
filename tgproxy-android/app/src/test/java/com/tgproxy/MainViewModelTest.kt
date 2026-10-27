@@ -66,7 +66,10 @@ class MainViewModelTest {
 
     /** 确定性假测试器：偶数下标可用（100ms），奇数下标不可用；保序。 */
     private class FakeTester : LatencyTester {
-        override suspend fun testAll(entries: List<ProxyEntry>): List<ProxyEntry> =
+        override suspend fun testAll(
+            entries: List<ProxyEntry>,
+            onProgress: (Int, Int) -> Unit,
+        ): List<ProxyEntry> =
             entries.mapIndexed { index, entry ->
                 if (index % 2 == 0) {
                     entry.copy(latencyMs = 100, status = ProxyStatus.AVAILABLE)
@@ -74,6 +77,16 @@ class MainViewModelTest {
                     entry.copy(latencyMs = null, status = ProxyStatus.UNAVAILABLE)
                 }
             }
+    }
+
+    /** 全通过假 TG 闸门（120ms）；不碰网络。 */
+    private class FakeGate : com.tgproxy.data.TelegramGateCaller {
+        override fun test(host: String, port: Int): Int? = 120
+    }
+
+    /** 全不过假 TG 闸门；不碰网络。 */
+    private class FailingGate : com.tgproxy.data.TelegramGateCaller {
+        override fun test(host: String, port: Int): Int? = null
     }
 
     /** 内存假设置存储：MutableStateFlow 发射，记录写入值。 */
@@ -97,6 +110,13 @@ class MainViewModelTest {
         override suspend fun setThemeMode(mode: ThemeMode) {
             savedTheme = mode
             state.value = state.value.copy(themeMode = mode)
+        }
+
+        var savedKnownGood: Boolean? = null
+
+        override suspend fun setKnownGoodEnabled(value: Boolean) {
+            savedKnownGood = value
+            state.value = state.value.copy(knownGoodEnabled = value)
         }
     }
 
@@ -130,7 +150,7 @@ class MainViewModelTest {
                 nextText = "socks5://1.2.3.4:1080"
             }
             val viewModel = MainViewModel(
-                repository = ProxyRepository(source, FakeTester()),
+                repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
                 settingsStore = FakeSettingsStore(),
                 timeSource = FakeTimeSource(),
             )
@@ -160,7 +180,7 @@ class MainViewModelTest {
             nextText = "socks5://1.2.3.4:1080"
         }
         val viewModel = MainViewModel(
-            repository = ProxyRepository(source, FakeTester()),
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
             settingsStore = FakeSettingsStore(),
             timeSource = FakeTimeSource(),
         )
@@ -187,7 +207,7 @@ class MainViewModelTest {
             nextText = "socks5://1.2.3.4:1080\nsocks5://1.2.3.5:1080"
         }
         val viewModel = MainViewModel(
-            repository = ProxyRepository(source, FakeTester()),
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
             settingsStore = FakeSettingsStore(),
             timeSource = FakeTimeSource(),
         )
@@ -227,7 +247,7 @@ class MainViewModelTest {
             val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
             val store = FakeSettingsStore()
             val viewModel = MainViewModel(
-                repository = ProxyRepository(source, FakeTester()),
+                repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
                 settingsStore = store,
                 timeSource = FakeTimeSource(),
             )
@@ -263,7 +283,7 @@ class MainViewModelTest {
         val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
         val time = FakeTimeSource()
         val viewModel = MainViewModel(
-            repository = ProxyRepository(source, FakeTester()),
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
             settingsStore = FakeSettingsStore(),
             timeSource = time,
         )
@@ -283,7 +303,7 @@ class MainViewModelTest {
         val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
         val time = FakeTimeSource()
         val viewModel = MainViewModel(
-            repository = ProxyRepository(source, FakeTester()),
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
             settingsStore = FakeSettingsStore(),
             timeSource = time,
         )
@@ -309,7 +329,7 @@ class MainViewModelTest {
         val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
         val time = FakeTimeSource()
         val viewModel = MainViewModel(
-            repository = ProxyRepository(source, FakeTester()),
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
             settingsStore = FakeSettingsStore(),
             timeSource = time,
         )
@@ -331,7 +351,7 @@ class MainViewModelTest {
         val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
         val store = FakeSettingsStore()
         val viewModel = MainViewModel(
-            repository = ProxyRepository(source, FakeTester()),
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
             settingsStore = store,
             timeSource = FakeTimeSource(),
         )
@@ -343,5 +363,115 @@ class MainViewModelTest {
         assertEquals(ThemeMode.DARK, store.savedTheme)
         assertEquals(ThemeMode.DARK, viewModel.settings.value.themeMode)
         viewModel.viewModelScope.cancel() // 结束测试：取消常驻收集/倒计时协程
+    }
+
+    @Test
+    fun `首轮 0 个通过双闸且无旧列表时清空且无错误`() = runTest(testDispatcher) {
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), FailingGate(), ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+        )
+        try {
+            advanceTimeBy(100)
+            // 首轮 0 达标且此前无列表：列表为空，不误报错误（与桌面版一致）
+            assertEquals(0, viewModel.uiState.value.proxies.size)
+            assertNull(viewModel.uiState.value.error)
+            assertEquals(0, viewModel.uiState.value.stats.available)
+            assertEquals(1, viewModel.uiState.value.stats.tgFailed)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun `已有列表时本轮 0 个通过双闸保留旧列表并提示门槛`() = runTest(testDispatcher) {
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        // 闸门只在首轮放行：第二次调用起全不过
+        val gate = object : com.tgproxy.data.TelegramGateCaller {
+            var calls = 0
+            override fun test(host: String, port: Int): Int? =
+                if (calls++ == 0) 120 else null
+        }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), gate, ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+        )
+        try {
+            advanceTimeBy(100)
+            assertEquals(1, viewModel.uiState.value.proxies.size)
+            assertNull(viewModel.uiState.value.error)
+
+            // 第二轮：0 保留 → 旧列表沿用 + 门槛提示
+            viewModel.refresh()
+            advanceTimeBy(100)
+            assertEquals(1, viewModel.uiState.value.proxies.size)
+            assertEquals("socks5://1.2.3.4:1080", viewModel.uiState.value.proxies[0].link)
+            assertTrue(
+                viewModel.uiState.value.error!!.contains("本轮 0 个节点通过 TG 实测"),
+            )
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun `known_good 开启时启动即展示沉淀列表`() = runTest(testDispatcher) {
+        val dir = java.io.File.createTempFile("vmkg", "").let { it.delete(); it.mkdirs(); it }
+        val file = java.io.File(dir, "known_good.json")
+        file.writeText(
+            """[{"link":"socks5://4.3.2.1:1080","host":"4.3.2.1","port":1080,"type":"SOCKS5"}]""",
+        )
+        val store = com.tgproxy.data.KnownGoodStore(file)
+        val gate = CompletableDeferred<Unit>()
+        val source = FakeSource().apply {
+            this.gate = gate
+            nextText = "socks5://1.2.3.4:1080"
+        }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), knownGood = store, ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+        )
+        try {
+            advanceTimeBy(100)
+            // 刷新仍挂起（gate 未放行），但 known_good 列表已先行展示
+            assertEquals(1, viewModel.uiState.value.proxies.size)
+            assertEquals("socks5://4.3.2.1:1080", viewModel.uiState.value.proxies[0].link)
+
+            gate.complete(Unit)
+            advanceTimeBy(100)
+            // 刷新完成后被本轮结果（1 条 TCP 通过 + 闸门通过）替换
+            assertEquals("socks5://1.2.3.4:1080", viewModel.uiState.value.proxies[0].link)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun `known_good 开关切换会持久化并立即生效`() = runTest(testDispatcher) {
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        val store = FakeSettingsStore()
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
+            settingsStore = store,
+            timeSource = FakeTimeSource(),
+        )
+        advanceTimeBy(100)
+
+        try {
+            viewModel.setKnownGoodEnabled(false)
+            advanceTimeBy(100)
+            assertEquals(false, store.savedKnownGood)
+            assertEquals(false, viewModel.settings.value.knownGoodEnabled)
+
+            viewModel.setKnownGoodEnabled(true)
+            advanceTimeBy(100)
+            assertEquals(true, store.savedKnownGood)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
     }
 }

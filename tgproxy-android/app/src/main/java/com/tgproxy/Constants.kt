@@ -43,8 +43,46 @@ object Constants {
     /** 单次 TCP connect 超时，等价桌面版 TEST_TIMEOUT_SEC=5.0 */
     const val TEST_TIMEOUT_MS = 5_000
 
-    /** 并发测试上限（桌面版现为 150；移动端取 64 以平衡吞吐与功耗） */
-    const val TEST_MAX_CONCURRENCY = 64
+    /** TCP 预筛并发上限（桌面版 TEST_MAX_WORKERS=150；移动端 128 平衡吞吐与功耗） */
+    const val TEST_MAX_CONCURRENCY = 128
+
+    // ============================================================================
+    // TG 实测（两关串行，与桌面版 proxy_manager.py 逐项一致）
+    // ============================================================================
+
+    /** 第一关目标：Telegram 数据中心 IP（桌面版 TELEGRAM_DC_HOST/PORT） */
+    const val TELEGRAM_DC_HOST = "149.154.167.51"
+    const val TELEGRAM_DC_PORT = 443
+
+    /** 第二关目标：Telegram 站点（桌面版 TELEGRAM_TEST_HOST/PORT） */
+    const val TELEGRAM_TEST_HOST = "desktop.telegram.org"
+    const val TELEGRAM_TEST_PORT = 443
+
+    /** 单关预算（连接+握手+CONNECT 共享），等价桌面版 TG_TEST_TIMEOUT_SEC=8.0 */
+    const val TG_TEST_TIMEOUT_MS = 8_000
+
+    /** 单节点两关总预算，等价桌面版 TG_TEST_DEADLINE_SEC=20.0 */
+    const val TG_TEST_DEADLINE_MS = 20_000
+
+    /** TG 实测并发上限（桌面版 TG_TEST_MAX_WORKERS=100；移动端取 96——TG 多为 8s 超时等待，
+     *  瓶颈在等待而非 CPU，高并发可显著缩短整轮耗时） */
+    const val TG_TEST_MAX_CONCURRENCY = 96
+
+    /** 延迟硬门槛：仅保留经代理到 TG 数据中心往返 ≤1000ms 的节点（桌面版 TG_LATENCY_LIMIT_MS） */
+    const val TG_LATENCY_LIMIT_MS = 1_000
+
+    // ============================================================================
+    // 连续失败拉黑（v2.1.0，与桌面版 v1.9.0 对齐）
+    // ============================================================================
+
+    /** 连败达到此次数即拉黑（跳过后续轮次测试） */
+    const val KNOWN_BAD_STREAK_LIMIT = 3
+
+    /** 拉黑保质期：过期自动解封重测（免费池 IP 会轮换/复活） */
+    const val KNOWN_BAD_EXPIRY_MS = 48 * 3_600_000L
+
+    /** 拉黑表容量上限（超量按最久未失败淘汰，防无限膨胀） */
+    const val KNOWN_BAD_MAX_ENTRIES = 10_000
 
     /** 自动更新间隔默认值（分钟） */
     const val DEFAULT_INTERVAL_MINUTES = 10

@@ -103,3 +103,56 @@ val DarkOutline = Color(0xFF4B5563)
 val DarkError = Color(0xFFF87171)
 val DarkErrorContainer = Color(0xFF451A1A)
 val DarkOnErrorContainer = Color(0xFFFECACA)
+
+// ============================================================================
+// Telegram 品牌色（v2.0 界面重做：主视觉统一为 Telegram 蓝）
+// ============================================================================
+
+/** Telegram 品牌蓝（telegram.org #2AABEE）。 */
+val TgBlue = Color(0xFF2AABEE)
+
+/** Telegram 品牌蓝深变体（按钮按压/渐变端点 #229ED9）。 */
+val TgBlueDeep = Color(0xFF229ED9)
+
+/** Telegram 深色聊天背景（#17212B）。 */
+val TgDarkBackground = Color(0xFF17212B)
+
+/** Telegram 深色消息气泡底（#232E3C）。 */
+val TgDarkSurface = Color(0xFF232E3C)
+
+/** Telegram 深色次级面板（#2C3A4B）。 */
+val TgDarkSurfaceHigh = Color(0xFF2C3A4B)
+
+/** 深色下列表分隔/描边。 */
+val TgDarkOutline = Color(0xFF35455A)
+
+/** 深色下主文本（#EAF0F4 偏白）。 */
+val TgDarkTextPrimary = Color(0xFFEAF0F4)
+
+/** 深色下次要文本（#7D8E9E）。 */
+val TgDarkTextSecondary = Color(0xFF7D8E9E)
+
+// ============================================================================
+// v2.1 仪表盘视觉（参考深色数据仪表盘风格：深藏青底 + 蓝→青渐变 + 霓虹点缀）
+// ============================================================================
+
+/** 页面深藏青底（参考 #0D1526）。 */
+val NavyBackground = Color(0xFF0D1526)
+
+/** 卡片深藏青面（比背景亮一级）。 */
+val NavySurface = Color(0xFF141F36)
+
+/** 次级面板/输入底（再亮一级）。 */
+val NavySurfaceHigh = Color(0xFF1C2A47)
+
+/** 深藏青系描边/分隔。 */
+val NavyOutline = Color(0xFF27365C)
+
+/** 仪表盘强调青（渐变端点/选中态 #00E5D0）。 */
+val AccentCyan = Color(0xFF00E5D0)
+
+/** 仪表盘强调粉（超门槛等警示高亮 #FF4D8D）。 */
+val AccentPink = Color(0xFFFF4D8D)
+
+/** 仪表盘次级文本（灰蓝 #8A94A6）。 */
+val NavyTextSecondary = Color(0xFF8A94A6)

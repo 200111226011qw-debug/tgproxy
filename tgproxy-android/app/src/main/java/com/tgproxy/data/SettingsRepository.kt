@@ -3,6 +3,7 @@ package com.tgproxy.data
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -36,6 +37,9 @@ interface SettingsStore {
 
     /** 写入主题模式。 */
     suspend fun setThemeMode(mode: ThemeMode)
+
+    /** 写入 known_good 沉淀开关。 */
+    suspend fun setKnownGoodEnabled(value: Boolean)
 }
 
 /** DataStore 单例委托（进程内唯一实例）。 */
@@ -63,6 +67,7 @@ class SettingsRepository(context: Context) : SettingsStore {
                     prefs[KEY_URL] ?: Constants.DEFAULT_PROXY_LIST_URL,
                 ),
                 themeMode = normalizeThemeMode(prefs[KEY_THEME]),
+                knownGoodEnabled = prefs[KEY_KNOWN_GOOD] ?: true,
             )
         }
         .catch { emit(Settings()) }
@@ -81,9 +86,14 @@ class SettingsRepository(context: Context) : SettingsStore {
         store.edit { prefs -> prefs[KEY_THEME] = mode.name }
     }
 
+    override suspend fun setKnownGoodEnabled(value: Boolean) {
+        store.edit { prefs -> prefs[KEY_KNOWN_GOOD] = value }
+    }
+
     private companion object {
         val KEY_INTERVAL = intPreferencesKey("interval_minutes")
         val KEY_URL = stringPreferencesKey("proxy_list_url")
         val KEY_THEME = stringPreferencesKey("theme_mode")
+        val KEY_KNOWN_GOOD = booleanPreferencesKey("known_good_enabled")
     }
 }

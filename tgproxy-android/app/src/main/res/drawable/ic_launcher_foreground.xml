@@ -4,11 +4,21 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 白色双向箭头：代理交换语义；位于自适应图标 72dp 安全区内 -->
+    <!-- 纸飞机（send 变体，TG 蓝 #2AABEE）：代理转发语义，位于自适应图标 66dp 安全区内 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,46 L44,46 L44,40 L32,54 L44,68 L44,62 L54,62 Z" />
+        android:fillColor="#2AABEE"
+        android:pathData="M36,71.5 L88.5,49 L36,26.5 L36,44 L73.5,49 L36,54 Z" />
+    <!-- 速度线（白）：测试/加速语义 -->
     <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M54,46 L64,46 L64,40 L76,54 L64,68 L64,62 L54,62 Z" />
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.9"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M22,42 L31,42" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeAlpha="0.9"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M22,58 L31,58" />
 </vector>

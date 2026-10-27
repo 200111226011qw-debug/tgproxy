@@ -12,8 +12,8 @@ android {
         applicationId = "com.tgproxy"
         minSdk = 24
         targetSdk = 35
-        versionCode = 9
-        versionName = "1.7.1"
+        versionCode = 11
+        versionName = "2.1.0"
     }
 
     buildTypes {
@@ -57,6 +57,7 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.navigation.compose)
 
     implementation(libs.okhttp)

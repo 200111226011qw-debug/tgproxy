@@ -71,6 +71,11 @@ SOURCE_GLOBAL_ZERO_RATIO = 0.8
 SOURCE_SAMPLE_FLOOR = 10
 # TG 实测延迟门槛：超过该值视为「太慢不可用」剔除（默认 1s；界面可调 500~60000）
 TG_LATENCY_LIMIT_MS = 1000
+# 连续失败拉黑（v1.9.0，与安卓 v2.1.0 对齐）：连败达到阈值的节点后续轮次跳过测试，
+# 超过保质期自动解封重测（免费池 IP 会轮换/复活）；条目超量按最久未失败淘汰
+KNOWN_BAD_STREAK_LIMIT = 3
+KNOWN_BAD_EXPIRY_SEC = 48 * 3600
+KNOWN_BAD_MAX_ENTRIES = 10000
 # raw.githubusercontent.com 直连失败时依次尝试的镜像（按国内可达性排序）
 MIRROR_HOSTS = ("cdn.jsdelivr.net", "gcore.jsdelivr.net", "fastly.jsdelivr.net")
 _RAW_URL_RE = re.compile(
@@ -547,23 +552,27 @@ class ProxyManager:
     """代理状态管理：多源抓取 -> 合并去重 -> 抽样 -> 并发测试 -> 供 API 读取。"""
 
     def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS,
-                 known_good_path=None, source_health_path=None,
-                 on_sources_changed=None, known_good_enabled=True):
+                 known_good_path=None, source_health_path=None, known_bad_path=None,
+                 on_sources_changed=None, known_good_enabled=True, _clock=None):
         self._lock = threading.RLock()  # 可重入：体检全程持锁，内部再取锁不致死锁
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
         self._max_tg_latency_ms = max_tg_latency_ms
         self._known_good_path = known_good_path
         self._known_good_enabled = bool(known_good_enabled)
         self._source_health_path = source_health_path
+        self._known_bad_path = known_bad_path
+        self._clock = _clock or time.time  # 可注入时钟：单测虚拟推进解封判定
+        self._known_bad = {}  # "host:port" -> {"fails": 连败数, "last_fail": 时间戳}
         self._on_sources_changed = on_sources_changed
         self._notice = None
         self._proxies = []
         self._sources = []
         self._stats = {"available": 0, "unverified": 0, "tg_failed": 0, "dropped": 0,
-                       "excluded": 0}
+                       "excluded": 0, "blacklisted": 0}
         self._updated_at = None
         self._fetching = False
         self._error = None
+        self._load_known_bad()
 
     def set_proxy_list_urls(self, urls):
         """热更新数据源列表（下次刷新生效）。
@@ -690,6 +699,17 @@ class ProxyManager:
         # 上轮验证通过的节点优先复测：不在池子里也补进来，抽样时优先保留
         preferred_keys = self._merge_known_good(merged, seen)
 
+        # 连续失败拉黑（v1.9.0）：连败达标且未过期的节点跳过本轮测试（含 known_good
+        # 补入的节点——连续 3 轮都过不了的沉淀节点同样不值得再测），节省筛选时间
+        blacklisted_keys = {
+            (host, port) for (host, port) in seen
+            if self._is_blacklisted(host, port)
+        }
+        if blacklisted_keys:
+            merged = [
+                e for e in merged if (e["host"], e["port"]) not in blacklisted_keys
+            ]
+
         if len(merged) > MAX_TOTAL:
             preferred = [e for e in merged if (e["host"], e["port"]) in preferred_keys]
             rest = [e for e in merged if (e["host"], e["port"]) not in preferred_keys]
@@ -712,8 +732,18 @@ class ProxyManager:
         tested = self._test_entries(merged)
         # 第一阶段：TCP 通的才进入第二阶段
         tcp_ok = [item for item in tested if item["status"] == "available"]
+        # TCP 预筛不通 -> 连败 +1（通过的留到 TG 阶段按两关结论计）
+        for item in tested:
+            if item["status"] != "available":
+                self._record_bad_fail(item["host"], item["port"])
         # 第二阶段：TG 实测（DC -> 站点串行两关）
         verified = self._test_telegram_entries(tcp_ok)
+        # TG 结论沉淀连败计数：两关通过（含超门槛）清零，未过 +1；MTProto 未验证不计
+        for item in verified:
+            if item["tg_ok"] is True:
+                self._record_bad_pass(item["host"], item["port"])
+            elif item["tg_ok"] is False:
+                self._record_bad_fail(item["host"], item["port"])
         # TG 两关通过且延迟达标的才保留；不通或太慢的都剔除。
         # MTProto 未参与 TG 实测（tg_ok=None）单独计为 unverified，不计入 available
         verified_ok = [item for item in verified if item["tg_ok"] is True]
@@ -751,6 +781,7 @@ class ProxyManager:
                 "tg_failed": tg_failed,
                 "dropped": len(tested) - len(tcp_ok),
                 "excluded": excluded_total + dropped_total,
+                "blacklisted": len(blacklisted_keys),
             }
             self._updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._notice = notice
@@ -777,6 +808,8 @@ class ProxyManager:
         # 沉淀本轮验证通过的节点，供下轮优先复测（锁外落盘）；开关关闭时不写
         if kept and self._known_good_enabled:
             self._save_known_good(kept)
+        # 连败计数落盘（锁外；每轮一次，先清理过期/超量）
+        self._save_known_bad()
 
     def _load_known_good(self):
         """读取上轮验证通过的节点（known_good.json；缺失/损坏返回空表）。"""
@@ -843,6 +876,75 @@ class ProxyManager:
         try:
             with open(self._known_good_path, "w", encoding="utf-8") as fh:
                 json.dump(records[:200], fh, ensure_ascii=False, indent=1)
+        except OSError:
+            pass
+
+    # ------------------------------------------------------------------
+    # 连续失败拉黑（v1.9.0：连败达标的节点跳过测试，节省筛选时间）
+    # ------------------------------------------------------------------
+
+    def _load_known_bad(self):
+        """读取连败拉黑表（known_bad.json；缺失/损坏/条目非法返回空表，
+        并顺带丢弃已过保质期的记录）。"""
+        self._known_bad = {}
+        if not self._known_bad_path or not os.path.isfile(self._known_bad_path):
+            return
+        try:
+            with open(self._known_bad_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        now = self._clock()
+        for key, item in data.items():
+            if not isinstance(item, dict):
+                continue
+            try:
+                fails = int(item["fails"])
+                last_fail = float(item["last_fail"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if fails > 0 and now - last_fail < KNOWN_BAD_EXPIRY_SEC:
+                self._known_bad[key] = {"fails": fails, "last_fail": last_fail}
+
+    def _is_blacklisted(self, host, port):
+        """该节点当前是否拉黑中（连败达标且未过保质期）。"""
+        item = self._known_bad.get("%s:%s" % (host, port))
+        if not item:
+            return False
+        return (item["fails"] >= KNOWN_BAD_STREAK_LIMIT
+                and self._clock() - item["last_fail"] < KNOWN_BAD_EXPIRY_SEC)
+
+    def _record_bad_fail(self, host, port):
+        """记一次失败（连败 +1）。只改内存，轮末 _save_known_bad 统一落盘。"""
+        key = "%s:%s" % (host, port)
+        item = self._known_bad.get(key) or {"fails": 0, "last_fail": 0.0}
+        item["fails"] += 1
+        item["last_fail"] = self._clock()
+        self._known_bad[key] = item
+
+    def _record_bad_pass(self, host, port):
+        """记一次通过（连败清零；含超门槛——通只是慢，不算坏）。"""
+        self._known_bad.pop("%s:%s" % (host, port), None)
+
+    def _save_known_bad(self):
+        """轮末落盘：先清理过期与超量条目，再整表覆盖；写盘失败静默。"""
+        if not self._known_bad_path:
+            return
+        now = self._clock()
+        self._known_bad = {
+            key: item for key, item in self._known_bad.items()
+            if now - item["last_fail"] < KNOWN_BAD_EXPIRY_SEC
+        }
+        if len(self._known_bad) > KNOWN_BAD_MAX_ENTRIES:
+            ordered = sorted(self._known_bad.items(),
+                             key=lambda kv: kv[1]["last_fail"])
+            for key, _item in ordered[:len(self._known_bad) - KNOWN_BAD_MAX_ENTRIES]:
+                self._known_bad.pop(key, None)
+        try:
+            with open(self._known_bad_path, "w", encoding="utf-8") as fh:
+                json.dump(self._known_bad, fh, ensure_ascii=False)
         except OSError:
             pass
 

@@ -5,6 +5,39 @@
 
 ---
 
+> ## ⚠️ v2.0.0 变更记录（2026-10-26，高于本文以下所有条款）
+>
+> v2.0.0 起安卓版与桌面版测试口径对齐，本文其余章节为 v1.x 设计快照，以下列变更为准：
+>
+> 1. **测试管线**：TCP 预筛（`ProxyTester`，`Semaphore(128)`，5s 超时，逐条进度上报）→ **TG 实测双闸**（新类 `data/TelegramGate.kt`：SOCKS5 无认证握手 → CONNECT Telegram DC 149.154.167.51:443，再 CONNECT desktop.telegram.org + TLS + HTTP 状态行；两关串行共享单节点 20s 总预算、单关 8s；并发 96，`TelegramGateCaller` 注入点）→ **1000ms 门槛**（`Constants.TG_LATENCY_LIMIT_MS`，超门槛计入 tg_failed）。
+> 2. **统计**：`Stats` 由四项改五项（available / unverified / tgFailed / dropped / excluded / tested），口径契约 available+unverified+tgFailed+dropped=tested；UI 由 `StatsGrid` 改为 `StatChips`（横滑胶囊）。
+> 3. **进度**：新增 `model/RefreshProgress`（FETCH / TCP_TEST / TG_TEST 三阶段 done/total），`ProxyRepository.refresh(urls, onProgress)` 逐阶段上报，UI 新增 `ProgressCard`。
+> 4. **known_good**：新增 `data/KnownGoodStore.kt`（应用私有目录 known_good.json；`enabled=false` 时不读不写；延迟/状态不落盘）；`Settings.knownGoodEnabled`（DataStore 键 `known_good_enabled`，默认开）；启动时先行展示沉淀列表，本轮刷新完成后替换。
+> 5. **排序/延迟口径**：`latencyMs` 语义改为「经代理到 TG 数据中心往返」（TG 实测通过后回填）；`PROXY_COMPARATOR` 首键由 status 改为 `TgVerdict`；延迟着色（`Badges.latencyColor`）改为 <1000 绿 / <3000 橙 / 其余红 / null 灰（桌面版口径）。
+> 6. **列表/交互**：列表仅含 TG 实测通过且 ≤1000ms 的节点；整卡点击唤起 Telegram 深链；行内复制/分享按钮（material-icons-extended）；known_good 先行展示条目半透明 + 「未测」胶囊。
+> 7. **主题**：深色主题改为 Telegram 品牌配色（#17212B / #232E3C / #2AABEE）；浅色主题不变。
+> 8. **可测性**：`ProxyTester`/`ProxyRepository` 增加可注入 `ioDispatcher`（JVM 单测全部协程共用同一测试调度器，消除跨线程派发竞态）；新增测试类 `TelegramGateTest` / `KnownGoodStoreTest`；`MainViewModelTest` / `ProxyRepositoryTest` / `ProxySortTest` / `ProxyTesterTest` 按新口径更新。测试矩阵：10 类 74 例 × debug/release = 148 例。
+> 9. **版本**：versionCode 10 / versionName 2.0.0。
+>
+> 以下 v1.x 快照中与此冲突的条款（C6 的 20 并发、F13 的延迟三档、Stats 四项、`StatsGrid`、`TEST_MAX_CONCURRENCY=20` 等）均已废止。
+
+> ## ⚠️ v2.1.0 变更记录（2026-10-26，叠加于 v2.0.0 之上）
+>
+> 1. **布局重构（列表优先）**：首屏 = 节点列表（LazyColumn + 下拉刷新）；状态条（进度/上轮摘要+耗时+倒计时）、错误条、空态卡作为列表首项；顶栏精简为 标题 + 更新时间/倒计时 + 设置齿轮；刷新按钮改右下角 FAB；设置（间隔/known_good/外观/数据源说明）收进 ModalBottomSheet。移除组件 `ControlBar` / `ProgressCard` / `StatChips`，新增 `StatusStrip` / `SettingsSheet` / `EmptyStateCard`，`ProxyList` 改为 `ProxyRowCard`（左 4dp 延迟色条 + 「使用」主按钮 64×48dp + 复制 40dp + 长按菜单）。
+> 2. **统计口径拆分**：`Stats` 五项→六项，新增 `overThreshold`（TG 两关通过但 >1000ms）；契约 available+unverified+tgFailed+overThreshold+dropped=tested；桌面版 tg_failed = tgFailed+overThreshold（含超慢口径不变）。
+> 3. **空态透明化**：0 节点时展示本轮全链路统计（测试/TCP 通过/TG 两关通过/超门槛）与原因说明（宁缺毋滥，超门槛不展示）。
+> 4. **耗时摘要**：`ProxyUiState.lastDurationMs`（MainViewModel 以 timeSource 计时），空闲状态条显示「上轮测试 N，保留 X，耗时 Y」。
+> 5. **应用图标**：自适应图标重画（#17212B 底 + #2AABEE 纸飞机 + 白速度线；API 24-25 矢量回退同步）。
+> 6. **版本**：versionCode 11 / versionName 2.1.0；测试仍 10 类 74 例 × 双变体 = 148 全绿。
+
+> ## ⚠️ v2.1.0 二次变更（2026-10-27，参考图风格化 + 连败拉黑，叠加于上方 v2.1.0 之上）
+>
+> 1. **仪表盘视觉（参考用户提供的两张参考图：蓝青渐变大卡 + 深色数据仪表盘）**：深色主题色板整体换为深藏青系（background #0D1526 / surface #141F36 / surfaceVariant #1C2A47 / outline #27365C / 次要文本 #8A94A6），强调色改青色 #00E5D0（primary）；新增 `HeroStatusCard`（蓝→青渐变大卡：空闲 = 「可用节点」44sp 大数字 + 最优延迟/上轮耗时 + 下次更新倒计时；刷新中 = 阶段名 + done/total + 白色进度条）与 `StatsCard`（五段统计：TG 未过/超门槛/TCP 不通/已拉黑/已排除）；`StatusStrip` 废止删除（formatCountdown/formatDuration 迁入 `HeroStatusCard.kt`）；`ProxyRowCard` 的「使用」按钮改 TG 蓝→青渐变填充、复制改圆底（surfaceVariant 圆形 40dp）、卡片去描边大圆角 16dp；标题改中文「TG 代理」。
+> 2. **连败拉黑（对齐桌面 v1.9.0）**：新增纯 Kotlin `KnownBadStore`（应用私有目录 known_bad.json；`KNOWN_BAD_STREAK_LIMIT=3` / `KNOWN_BAD_EXPIRY_MS=48h` / `KNOWN_BAD_MAX_ENTRIES=10000`，时钟注入可测；记录只在内存累加、轮末统一 persist）。管线接入：抽样后过滤 `isBlacklisted` 节点（不进 TCP 预筛）→ TCP 不通或 TG FAIL 连败 +1 → TG PASS（含超门槛）清零 → 轮末落盘。`Stats` 新增 `blacklisted`（独立于 tested 口径）；设置弹层数据源说明补充拉黑规则；空态卡补充「连续失败拉黑跳过 N 个」行。
+> 3. **测试**：新增 `KnownBadStoreTest`（7 例）+ `ProxyRepositoryTest` 连败四场景（4 例）；11 类 85 例 × 双变体 = 170 全绿。
+
+---
+
 ## 1. 实现方案与框架选型
 
 ### 1.1 核心技术挑战与对策
