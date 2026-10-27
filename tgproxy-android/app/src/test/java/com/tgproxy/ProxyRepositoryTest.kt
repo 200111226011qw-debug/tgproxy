@@ -6,9 +6,11 @@ import com.tgproxy.data.ProxyRepository
 import com.tgproxy.data.ProxyRepository.RefreshResult
 import com.tgproxy.data.ProxySource
 import com.tgproxy.data.TelegramGateCaller
+import com.tgproxy.model.GateOutcome
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.RefreshStage
+import com.tgproxy.model.TgGateStage
 import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -349,6 +351,72 @@ class ProxyRepositoryTest {
             val result = repository.refresh("https://example.com/proxy.txt")
 
             assertTrue(result is RefreshResult.Failure)
+        }
+    }
+
+    /** 按 host 脚本化落点的假闸门（验证四桶聚合）。 */
+    private class StagedGate(private val byHost: Map<String, GateOutcome>) : TelegramGateCaller {
+        override fun test(host: String, port: Int): Int? =
+            testDetailed(host, port, null).latencyMs
+
+        override fun test(host: String, port: Int, maxLatencyMs: Int?): Int? =
+            testDetailed(host, port, maxLatencyMs).latencyMs
+
+        override fun testDetailed(host: String, port: Int, maxLatencyMs: Int?): GateOutcome =
+            byHost[host] ?: GateOutcome(TgGateStage.DC_FAIL, null)
+    }
+
+    @Test
+    fun `两关分布按落点正确分桶`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val hosts = listOf("1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4")
+            val source = FakeSource().apply {
+                nextText = hosts.joinToString("\n") { "socks5://$it:1080" }
+            }
+            val gate = StagedGate(
+                mapOf(
+                    "1.1.1.1" to GateOutcome(TgGateStage.OK, 500),
+                    "2.2.2.2" to GateOutcome(TgGateStage.LATENCY_REJECTED, 2_000),
+                    "3.3.3.3" to GateOutcome(TgGateStage.WEB_FAIL, null),
+                    "4.4.4.4" to GateOutcome(TgGateStage.DC_FAIL, null),
+                ),
+            )
+            val repository = ProxyRepository(source, AllPassTester(), gate, ioDispatcher = td)
+
+            val result = repository.refresh("https://example.com/proxy.txt")
+
+            assertTrue(result is RefreshResult.Success)
+            result as RefreshResult.Success
+            val g = result.gateStats
+            assertEquals("ok 分桶错误：$g", 1, g.ok)
+            assertEquals("超门槛分桶错误：$g", 1, g.latencyRejected)
+            assertEquals("站点失败分桶错误：$g", 1, g.webFail)
+            assertEquals("连接失败分桶错误：$g", 1, g.dcFail)
+            assertEquals(4, g.total)
+        }
+    }
+
+    @Test
+    fun `超门槛节点不计入连败（落点不能当成失败）`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val source = FakeSource().apply { nextText = "socks5://2.2.2.2:1080" }
+            val gate = StagedGate(
+                mapOf("2.2.2.2" to GateOutcome(TgGateStage.LATENCY_REJECTED, 2_000)),
+            )
+            val bad = com.tgproxy.data.KnownBadStore(badFile("kb-prune"))
+            val repository = ProxyRepository(
+                source, AllPassTester(), gate, knownBad = bad, ioDispatcher = td,
+            )
+
+            repository.refresh("https://example.com/proxy.txt")
+
+            // 超门槛是「连得上但太慢」：tgVerdict=PASS → recordSuccess 清零连败，
+            // 不能像 dc_fail 那样累计。否则三轮后被误拉黑。
+            assertTrue("超门槛节点被记成连败了", bad.isBlacklisted("2.2.2.2", 1080).not())
+            assertEquals(0, repository.refresh("https://example.com/proxy.txt")
+                .let { (it as RefreshResult.Success).stats.blacklisted })
         }
     }
 

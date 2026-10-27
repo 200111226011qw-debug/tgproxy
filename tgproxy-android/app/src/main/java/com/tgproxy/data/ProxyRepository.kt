@@ -1,6 +1,7 @@
 package com.tgproxy.data
 
 import com.tgproxy.Constants
+import com.tgproxy.model.GateOutcome
 import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType
@@ -8,6 +9,8 @@ import com.tgproxy.model.RefreshProgress
 import com.tgproxy.model.RefreshStage
 import com.tgproxy.model.StageDurations
 import com.tgproxy.model.Stats
+import com.tgproxy.model.TgGateStage
+import com.tgproxy.model.TgGateStats
 import com.tgproxy.model.TgVerdict
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -57,6 +60,8 @@ class ProxyRepository(
             val updatedAt: String,
             /** 分阶段耗时（纯度量，不参与任何判定）。 */
             val durations: StageDurations = StageDurations(),
+            /** 本轮 TG 两关分布（漏斗用）。 */
+            val gateStats: TgGateStats = TgGateStats(),
         ) : RefreshResult
 
         /** 失败：[error] 固定前缀「抓取代理列表失败：」。 */
@@ -133,7 +138,7 @@ class ProxyRepository(
         }
 
         // 第二阶段：TG 实测两关（仅 SOCKS5；MTProto 标记未验证）
-        val verified = testTelegramEntries(tcpOk) { done, total ->
+        val (verified, gateStats) = testTelegramEntries(tcpOk) { done, total ->
             onProgress(RefreshProgress(RefreshStage.TG_TEST, done, total))
         }
 
@@ -182,8 +187,10 @@ class ProxyRepository(
         // 总耗时，不留未计时的缝
         val tDone = System.nanoTime()
         RefreshResult.Success(
-            kept, stats, nowText(),
-            StageDurations(
+            entries = kept,
+            stats = stats,
+            updatedAt = nowText(),
+            durations = StageDurations(
                 fetchMs = StageDurations.msBetween(tStart, tFetched),
                 prepareMs = StageDurations.msBetween(tFetched, tPrepared),
                 tcpMs = StageDurations.msBetween(tPrepared, tTcpDone),
@@ -191,6 +198,7 @@ class ProxyRepository(
                 commitMs = StageDurations.msBetween(tTgDone, tDone),
                 totalMs = StageDurations.msBetween(tStart, tDone),
             ),
+            gateStats = gateStats,
         )
     } catch (e: CancellationException) {
         throw e
@@ -266,11 +274,16 @@ class ProxyRepository(
     private suspend fun testTelegramEntries(
         entries: List<ProxyEntry>,
         onProgress: (Int, Int) -> Unit,
-    ): List<ProxyEntry> {
+    ): Pair<List<ProxyEntry>, TgGateStats> {
         val socks5Count = entries.count { it.type == ProxyType.SOCKS5 }
         val done = java.util.concurrent.atomic.AtomicInteger()
+        // 两关漏斗的四个桶（并发累加，用原子计数）
+        val dcFail = java.util.concurrent.atomic.AtomicInteger()
+        val latencyRejected = java.util.concurrent.atomic.AtomicInteger()
+        val webFail = java.util.concurrent.atomic.AtomicInteger()
+        val okCount = java.util.concurrent.atomic.AtomicInteger()
         val semaphore = Semaphore(Constants.TG_TEST_MAX_CONCURRENCY)
-        return withContext(ioDispatcher) {
+        val tested = withContext(ioDispatcher) {
             coroutineScope {
                 entries.map { entry ->
                     if (entry.type != ProxyType.SOCKS5) {
@@ -279,13 +292,21 @@ class ProxyRepository(
                     } else {
                         async {
                             semaphore.withPermit {
-                                val latency = try {
-                                    // 传入门槛以启用剪枝：dcMs 超门槛的节点直接返回
-                                    // dcMs（归入 overThreshold），不跑第二关
-                                    tgGate.test(entry.host, entry.port, tgLatencyLimitMs)
+                                val outcome = try {
+                                    // 用 testDetailed 拿落点：只看返回值的话，
+                                    // 「剪枝」与「两关通过」都非空、
+                                    // 「DC 失败」与「站点失败」都是 null，无法分桶
+                                    tgGate.testDetailed(entry.host, entry.port, tgLatencyLimitMs)
                                 } catch (e: Exception) {
-                                    null
+                                    GateOutcome(TgGateStage.DC_FAIL, null)
                                 }
+                                when (outcome.stage) {
+                                    TgGateStage.DC_FAIL -> dcFail.incrementAndGet()
+                                    TgGateStage.LATENCY_REJECTED -> latencyRejected.incrementAndGet()
+                                    TgGateStage.WEB_FAIL -> webFail.incrementAndGet()
+                                    TgGateStage.OK -> okCount.incrementAndGet()
+                                }
+                                val latency = outcome.latencyMs
                                 val verdict = if (latency != null) TgVerdict.PASS else TgVerdict.FAIL
                                 entry.copy(
                                     latencyMs = latency,
@@ -300,6 +321,12 @@ class ProxyRepository(
                 }.awaitAll()
             }
         }
+        return tested to TgGateStats(
+            dcFail = dcFail.get(),
+            latencyRejected = latencyRejected.get(),
+            webFail = webFail.get(),
+            ok = okCount.get(),
+        )
     }
 
     /** known_good 开关同步（设置流首帧与切换时调用；立即生效）。 */

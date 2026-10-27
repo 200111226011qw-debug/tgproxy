@@ -1,9 +1,11 @@
 package com.tgproxy
 
+import com.tgproxy.data.defaultTelegramGateCaller
 import com.tgproxy.data.ProxySocketProvider
 import com.tgproxy.data.TelegramGate
 import com.tgproxy.data.TlsChannel
 import com.tgproxy.data.TlsWrapper
+import com.tgproxy.model.TgGateStage
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -286,5 +288,79 @@ class TelegramGateTest {
 
         assertNotNull(result)
         assertEquals("不传门槛不该剪枝", 1, tlsCalls)
+    }
+
+    // ========================================================================
+    // 落点分类（两关漏斗的四个桶）
+    // ========================================================================
+
+    @Test
+    fun `落点分类：第一关连不上为 DC_FAIL`() {
+        val gate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> throw IOException("refused") },
+            tlsWrapper = TlsWrapper { _, _, _ -> throw IOException("unexpected") },
+        )
+        assertEquals(TgGateStage.DC_FAIL, gate.testDetailed("1.2.3.4", 1080, 1_000).stage)
+    }
+
+    @Test
+    fun `落点分类：第一关超门槛为 LATENCY_REJECTED 且不跑第二关`() {
+        var tlsCalls = 0
+        val gate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> FakeSocket(okScript()) },
+            tlsWrapper = TlsWrapper { _, _, _ ->
+                tlsCalls++
+                throw IOException("剪枝后不该走到第二关")
+            },
+            clock = advancingClock(stepMs = 1_500),
+        )
+
+        val outcome = gate.testDetailed("1.2.3.4", 1080, maxLatencyMs = 100)
+
+        assertEquals(TgGateStage.LATENCY_REJECTED, outcome.stage)
+        assertNotNull(outcome.latencyMs)
+        assertEquals("剪枝后不该调用第二关", 0, tlsCalls)
+    }
+
+    @Test
+    fun `落点分类：第二关失败为 WEB_FAIL`() {
+        val gate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> FakeSocket(okScript()) },
+            tlsWrapper = TlsWrapper { _, _, _ -> FakeTlsChannel("XYZ garbage") },
+            clock = advancingClock(stepMs = 1),
+        )
+        assertEquals(TgGateStage.WEB_FAIL, gate.testDetailed("1.2.3.4", 1080, 60_000).stage)
+    }
+
+    @Test
+    fun `落点分类：两关全过为 OK`() {
+        val gate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> FakeSocket(okScript()) },
+            tlsWrapper = TlsWrapper { _, _, _ -> FakeTlsChannel("HTTP/1.1 200 OK\r\n") },
+            clock = advancingClock(stepMs = 1),
+        )
+        val outcome = gate.testDetailed("1.2.3.4", 1080, 60_000)
+        assertEquals(TgGateStage.OK, outcome.stage)
+        assertNotNull(outcome.latencyMs)
+    }
+
+    @Test
+    fun `生产包装器把落点透传（不吞掉阶段信息）`() {
+        // 接口的 testDetailed 有默认粗分类（非空→OK、null→DC_FAIL）。若包装器
+        // 忘了覆写，「站点失败」会被错算成「连接失败」，漏斗就撒谎了。
+        // 用可注入的假闸门把这条接错抓出来：第二关失败必须是 WEB_FAIL。
+        val fakeGate = TelegramGate(
+            socketProvider = ProxySocketProvider { _, _, _ -> FakeSocket(okScript()) },
+            tlsWrapper = TlsWrapper { _, _, _ -> FakeTlsChannel("XYZ garbage") },
+            clock = advancingClock(stepMs = 1),
+        )
+        val caller = defaultTelegramGateCaller(fakeGate)
+
+        val outcome = caller.testDetailed("1.2.3.4", 1080, 60_000)
+
+        assertEquals(
+            "包装器没覆写 testDetailed，落点被粗分类吞掉了",
+            TgGateStage.WEB_FAIL, outcome.stage,
+        )
     }
 }

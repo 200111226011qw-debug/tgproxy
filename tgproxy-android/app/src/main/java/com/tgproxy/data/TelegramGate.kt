@@ -1,6 +1,8 @@
 package com.tgproxy.data
 
 import com.tgproxy.Constants
+import com.tgproxy.model.GateOutcome
+import com.tgproxy.model.TgGateStage
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -48,18 +50,45 @@ fun interface TelegramGateCaller {
      * 必须覆写**，否则剪枝不生效（[DefaultTelegramGateCaller] 已覆写）。
      */
     fun test(host: String, port: Int, maxLatencyMs: Int?): Int? = test(host, port)
+
+    /**
+     * 带落点的入口（两关漏斗统计用）。
+     *
+     * 默认实现只能给出**粗分类**：有延迟算 OK、无延迟算 DC_FAIL —— 因为
+     * 三参接口把阶段信息丢掉了（剪枝与两关通过都返回非空，DC 失败与站点失败
+     * 都返回 null）。**生产实现必须覆写**，否则漏斗会把站点失败算成连接失败。
+     */
+    fun testDetailed(host: String, port: Int, maxLatencyMs: Int?): GateOutcome {
+        val ms = test(host, port, maxLatencyMs)
+        return GateOutcome(if (ms != null) TgGateStage.OK else TgGateStage.DC_FAIL, ms)
+    }
 }
+
+/**
+ * 生产包装器工厂（[gate] 可注入，便于单测验证「落点是否被透传」）。
+ *
+ * 之所以做成工厂而不是直接写死 `SharedTelegramGate`：接口的 [TelegramGateCaller.testDetailed]
+ * 有默认实现（粗分类），如果这里忘了覆写，编译和运行都不会报错 —— 漏斗会把
+ * 「站点失败」算成「连接失败」。可注入才能在单测里把这条接错抓出来。
+ */
+fun defaultTelegramGateCaller(gate: TelegramGate = SharedTelegramGate): TelegramGateCaller =
+    object : TelegramGateCaller {
+        override fun test(host: String, port: Int): Int? = gate.test(host, port)
+
+        override fun test(host: String, port: Int, maxLatencyMs: Int?): Int? =
+            gate.test(host, port, maxLatencyMs = maxLatencyMs)
+
+        override fun testDetailed(host: String, port: Int, maxLatencyMs: Int?): GateOutcome =
+            gate.testDetailed(host, port, maxLatencyMs = maxLatencyMs)
+    }
+
+// 必须声明在 DefaultTelegramGateCaller **之前**：Kotlin 顶层属性按文件顺序初始化，
+// 而 defaultTelegramGateCaller() 的默认参数在调用时立即求值。放在后面会读到 null，
+// 抛 ExceptionInInitializerError（用 lambda 时引用在函数体内、延迟求值，所以不暴露）。
+private val SharedTelegramGate = TelegramGate()
 
 /** 生产实现：共享无状态 [TelegramGate]（Socket 独立创建，线程安全）。 */
-val DefaultTelegramGateCaller: TelegramGateCaller = object : TelegramGateCaller {
-    override fun test(host: String, port: Int): Int? =
-        SharedTelegramGate.test(host, port)
-
-    override fun test(host: String, port: Int, maxLatencyMs: Int?): Int? =
-        SharedTelegramGate.test(host, port, maxLatencyMs = maxLatencyMs)
-}
-
-private val SharedTelegramGate = TelegramGate()
+val DefaultTelegramGateCaller: TelegramGateCaller = defaultTelegramGateCaller()
 
 /**
  * TG 实测（与桌面版 test_telegram_via_socks5 两关串行逐项对齐）：
@@ -95,25 +124,46 @@ class TelegramGate(
         timeoutMs: Int = Constants.TG_TEST_TIMEOUT_MS,
         deadlineMs: Int = Constants.TG_TEST_DEADLINE_MS,
         maxLatencyMs: Int? = null,
-    ): Int? {
+    ): Int? = testDetailed(host, port, timeoutMs, deadlineMs, maxLatencyMs).latencyMs
+
+    /**
+     * 两关串行入口的详细版：额外返回落点（DC_FAIL / LATENCY_REJECTED / WEB_FAIL / OK）。
+     *
+     * 漏斗统计需要它 —— 单看 [test] 的返回值，「剪枝」和「两关通过」都是非空，
+     * 「DC 失败」和「站点失败」都是 null，无法区分。
+     */
+    fun testDetailed(
+        host: String,
+        port: Int,
+        timeoutMs: Int = Constants.TG_TEST_TIMEOUT_MS,
+        deadlineMs: Int = Constants.TG_TEST_DEADLINE_MS,
+        maxLatencyMs: Int? = null,
+    ): GateOutcome {
         // 桌面版：stage = max(1.0, min(timeout, deadline))
         val stageMs = maxOf(1, minOf(timeoutMs, deadlineMs))
         val started = clock()
         val dcMs = testSocks5TelegramDc(host, port, stageMs,
             Constants.TELEGRAM_DC_HOST, Constants.TELEGRAM_DC_PORT)
-        if (dcMs == null) return null
+            ?: return GateOutcome(TgGateStage.DC_FAIL, null)
         // 剪枝：dcMs 就是最终的 tg_latency，超门槛的节点必然被剔除，第二关
         // （TLS+HTTP）不必再跑。返回 dcMs 而不是 null —— 让上层归入「超门槛」
         // 而不是「连接失败」，否则会误增连败、三轮后被拉黑。
-        if (shouldPrune(dcMs, maxLatencyMs)) return dcMs
+        if (shouldPrune(dcMs, maxLatencyMs)) {
+            return GateOutcome(TgGateStage.LATENCY_REJECTED, dcMs)
+        }
         val remainingMs = deadlineMs - elapsedMs(started)
-        if (remainingMs <= MIN_REMAINING_MS) return null
+        if (remainingMs <= MIN_REMAINING_MS) {
+            return GateOutcome(TgGateStage.WEB_FAIL, null)
+        }
         val webOk = testTelegramWebViaSocks5(
             host, port, minOf(timeoutMs, remainingMs.toInt()),
             Constants.TELEGRAM_TEST_HOST, Constants.TELEGRAM_TEST_PORT,
         )
-        if (webOk == null) return null
-        return dcMs
+        return if (webOk == null) {
+            GateOutcome(TgGateStage.WEB_FAIL, null)
+        } else {
+            GateOutcome(TgGateStage.OK, dcMs)
+        }
     }
 
     /**
