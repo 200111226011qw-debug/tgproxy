@@ -22,6 +22,10 @@ data class ProxyUiState(
     val lastDurationMs: Long? = null,
     val error: String? = null,
     val stats: Stats = Stats(),
+    /** 本轮 TG 两关分布（漏斗卡片用）。 */
+    val tgStats: TgGateStats = TgGateStats(),
+    /** 本轮分阶段耗时（时间轴卡片用）。 */
+    val durations: StageDurations = StageDurations(),
     val proxies: List<ProxyEntry> = emptyList(),
     val countdownSec: Int = 0,
     val countdownStarted: Boolean = false,

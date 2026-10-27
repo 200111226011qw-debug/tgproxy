@@ -47,10 +47,12 @@ import com.tgproxy.model.TgVerdict
 import com.tgproxy.ui.components.EmptyStateCard
 import com.tgproxy.ui.components.ErrorBanner
 import com.tgproxy.ui.components.HeroStatusCard
+import com.tgproxy.ui.components.MetricGrid
 import com.tgproxy.ui.components.ProxyActionDialog
 import com.tgproxy.ui.components.ProxyRowCard
 import com.tgproxy.ui.components.SettingsSheetContent
-import com.tgproxy.ui.components.StatsCard
+import com.tgproxy.ui.components.StageTimeline
+import com.tgproxy.ui.components.TgGateSummary
 import com.tgproxy.ui.components.formatCountdown
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -209,8 +211,27 @@ fun MainScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                             modifier = Modifier.padding(top = 4.dp),
                         )
                     }
+                    // 自适应指标网格（可用数 / 超门槛 / DC 失败 / 站点失败 / TCP 不通 / 已拉黑）
                     item {
-                        StatsCard(stats = uiState.stats)
+                        MetricGrid(
+                            stats = uiState.stats,
+                            tgStats = uiState.tgStats,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+                    // 漏斗解释：把「测了 N 个却只剩 M 个」说清楚
+                    item {
+                        TgGateSummary(
+                            tgStats = uiState.tgStats,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
+                    }
+                    // 上轮分阶段耗时（本轮进行中没有实时值）
+                    item {
+                        StageTimeline(
+                            durations = uiState.durations,
+                            modifier = Modifier.padding(horizontal = 16.dp),
+                        )
                     }
 
                     // 错误提示条（条件显示）

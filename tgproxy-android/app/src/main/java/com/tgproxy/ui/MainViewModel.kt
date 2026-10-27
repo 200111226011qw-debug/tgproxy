@@ -132,6 +132,8 @@ class MainViewModel(
                             stats = result.stats,
                             updatedAt = result.updatedAt,
                             lastDurationMs = durationMs,
+                            tgStats = result.gateStats,
+                            durations = result.durations,
                             error = null,
                         )
                     } else if (previous.isNotEmpty()) {
@@ -140,6 +142,8 @@ class MainViewModel(
                             stats = result.stats,
                             updatedAt = result.updatedAt,
                             lastDurationMs = durationMs,
+                            tgStats = result.gateStats,
+                            durations = result.durations,
                             error = "本轮 0 个节点通过 TG 实测（门槛 ${Constants.TG_LATENCY_LIMIT_MS}ms），已保留上一轮列表",
                         )
                     } else {
@@ -148,6 +152,8 @@ class MainViewModel(
                             stats = result.stats,
                             updatedAt = result.updatedAt,
                             lastDurationMs = durationMs,
+                            tgStats = result.gateStats,
+                            durations = result.durations,
                             error = null,
                         )
                     }

@@ -202,6 +202,28 @@ class MainViewModelTest {
     }
 
     @Test
+    fun `两关分布进入 uiState（仪表盘漏斗数据源）`() = runTest(testDispatcher) {
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+        )
+        advanceTimeBy(200)
+
+        val state = viewModel.uiState.value
+        // FakeGate 只实现了两参 test（返回 120ms 非空）→ 接口默认 testDetailed
+        // 粗分类为 OK。这里验证的是「repository 的 gateStats 有没有被搬进 uiState」，
+        // 搬漏了就是空对象，total 会是 0。
+        assertTrue("两关分布没进 uiState：${state.tgStats}", state.tgStats.total >= 1)
+        assertEquals("两关分布分桶错误：${state.tgStats}", 1, state.tgStats.ok)
+        // durations 与 tgStats 在同一条 copy 里赋值；虚拟时间下 totalMs 可能为 0，
+        // 只断言非负 —— 「有没有赋值」由上面 tgStats 那条覆盖
+        assertTrue(state.durations.totalMs >= 0)
+        viewModel.viewModelScope.cancel()
+    }
+
+    @Test
     fun `抓取失败保留旧列表并展示错误，下一轮成功后清除错误`() = runTest(testDispatcher) {
         val source = FakeSource().apply {
             nextText = "socks5://1.2.3.4:1080\nsocks5://1.2.3.5:1080"
