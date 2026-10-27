@@ -11,7 +11,7 @@ import struct
 import threading
 import time
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
@@ -87,6 +87,9 @@ TCP_TIMEOUT_WARN_SEC = 5.0
 # 免费列表动辄数万条，全量 TCP 测试耗时过久；抽样上限让单轮刷新控制在分钟级
 MAX_PER_SOURCE = 1000
 MAX_TOTAL = 3000
+# 实时进度：每完成这么多个节点上报一次，降低锁开销
+PROGRESS_STEP = 20
+
 # TCP 预筛并发。提高并发能直接压缩 TCP 阶段，但受本地端口/句柄上限约束，
 # 且对免费代理站点是成倍的瞬时压力 —— 用环境变量做 A/B，不要直接改死。
 # 150 → 300 实测：TCP 每节点 10.0 → 5.2 ms，dropped 占比反而从 62% 降到 56%，
@@ -784,6 +787,9 @@ class ProxyManager:
         self._stage_durations = {}
         # 上一轮 TG 两关各自的耗时分布（dc_fail / web_fail / ok 的计数与分位）
         self._tg_gate_stats = {}
+        # 实时进度：独立锁，避免与 _lock 抢（_lock 在体检全程持有）
+        self._progress_lock = threading.Lock()
+        self._live_progress = {"stage": "idle", "done": 0, "total": 0}
         self._load_known_bad()
 
     def set_proxy_list_urls(self, urls):
@@ -821,6 +827,15 @@ class ProxyManager:
         with self._lock:
             self._max_tg_latency_ms = value
 
+    def _set_progress(self, stage, done=0, total=0):
+        """更新实时进度。
+
+        用独立锁而不是 _lock：体检阶段会长时间持有 _lock，进度上报若挤在
+        同一把锁上，会把 /api/proxies 的读取拖慢。
+        """
+        with self._progress_lock:
+            self._live_progress = {"stage": stage, "done": done, "total": total}
+
     def get_state(self):
         """返回当前完整状态快照（与 /api/proxies 字段一致）。"""
         with self._lock:
@@ -832,6 +847,7 @@ class ProxyManager:
                 "stats": dict(self._stats),
                 "stage_durations": dict(self._stage_durations),
                 "tg_gate_stats": dict(self._tg_gate_stats),
+                "progress": dict(self._live_progress),
                 "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
             }
@@ -859,6 +875,9 @@ class ProxyManager:
         finally:
             with self._lock:
                 self._fetching = False
+            # 无论成功、异常还是提前退出，进度都必须回到 idle，否则界面会卡在
+            # 一个永远不动的阶段上
+            self._set_progress("idle", 0, 0)
         return True
 
     def _fetch_one(self, url):
@@ -878,9 +897,18 @@ class ProxyManager:
         urls = list(self._proxy_list_urls)[:FETCH_MAX_SOURCES]
         sources = []
         t_stage = time.perf_counter()
+        self._set_progress("fetch", 0, len(urls))
+        fetched = [None] * len(urls)
         with ThreadPoolExecutor(max_workers=max(1, len(urls))) as executor:
-            fetched = list(executor.map(self._fetch_one, urls))
+            futures = {executor.submit(self._fetch_one, url): index
+                       for index, url in enumerate(urls)}
+            fetched_done = 0
+            for future in as_completed(futures):
+                fetched[futures[future]] = future.result()
+                fetched_done += 1
+                self._set_progress("fetch", fetched_done, len(urls))
         stages["fetch"] = time.perf_counter() - t_stage
+        self._set_progress("prepare", 0, 0)
         t_stage = time.perf_counter()
 
         merged = []
@@ -990,6 +1018,7 @@ class ProxyManager:
                     continue
                 per_src_verified[src_url] = per_src_verified.get(src_url, 0) + 1
         notice = self._update_source_health(sources, per_src_verified)
+        self._set_progress("commit", 0, 0)
         t_stage = time.perf_counter()
         with self._lock:
             previous = self._proxies
@@ -1333,6 +1362,10 @@ class ProxyManager:
             with samples_lock:
                 samples.append(record)
 
+        # 进度必须在 submit 之前设置：submit 会立刻起 worker，晚一步设的话
+        # 第一个任务读到的还是上一个阶段的进度
+        socks5_total = sum(1 for e in entries if e["type"] == "socks5")
+        self._set_progress("tg", 0, socks5_total)
         results = [None] * len(entries)
         with ThreadPoolExecutor(max_workers=TG_TEST_MAX_WORKERS) as executor:
             futures = {
@@ -1343,12 +1376,20 @@ class ProxyManager:
                 for index, entry in enumerate(entries)
                 if entry["type"] == "socks5"
             }
-            for index, future in futures.items():
+            futures_rev = {f: i for i, f in futures.items()}
+            tg_total = len(futures)
+            tg_done = 0
+            # futures 是 {index: future}，as_completed 要的是 future 序列
+            for future in as_completed(futures.values()):
+                index = futures_rev[future]
                 entry = dict(entries[index])
                 latency = future.result()
                 entry["tg_ok"] = latency is not None
                 entry["tg_latency_ms"] = latency
                 results[index] = entry
+                tg_done += 1
+                if tg_done % PROGRESS_STEP == 0 or tg_done == tg_total:
+                    self._set_progress("tg", tg_done, tg_total)
             # 未参与 SOCKS5 实测的（MTProto）标记为未验证
             for index, entry in enumerate(entries):
                 if index not in futures:
@@ -1375,15 +1416,22 @@ class ProxyManager:
                 self._max_tg_latency_ms, timeout,
             )
         results = [None] * len(entries)
+        total = len(entries)
+        self._set_progress("tcp", 0, total)
         with ThreadPoolExecutor(max_workers=TEST_MAX_WORKERS) as executor:
             futures = {
                 executor.submit(test_tcp_latency, entry["host"], entry["port"], timeout): index
                 for index, entry in enumerate(entries)
             }
-            for future, index in futures.items():
+            done = 0
+            for future in as_completed(futures):
+                index = futures[future]
                 entry = dict(entries[index])
                 latency = future.result()
                 entry["latency_ms"] = latency
                 entry["status"] = "available" if latency is not None else "unavailable"
                 results[index] = entry
+                done += 1
+                if done % PROGRESS_STEP == 0 or done == total:
+                    self._set_progress("tcp", done, total)
         return results

@@ -232,6 +232,38 @@ def open_external_url(url):
         subprocess.Popen(["xdg-open", url])
 
 
+def protocol_has_handler(scheme):
+    """检查 URL scheme 是否真的关联到了可执行程序。
+
+    为什么必须自己查：Windows 上如果注册表里存在
+    `HKCU\\Software\\Classes\\<scheme>` 但**没有 `shell\\open\\command`**
+    （典型来源：装过便携版/商店版后残留的残缺键），ShellExecute 会找到这个
+    空壳 handler、却没有任何命令可执行 —— 而 `os.startfile` **静默返回成功**，
+    不抛异常。表现就是「点了没反应，但程序以为成功了」。
+
+    这里返回 False 时调用方应当降级为「把链接交给用户手动复制」。
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - 非 Windows 分支已提前返回
+        return True
+    candidates = (
+        (winreg.HKEY_CURRENT_USER, r"Software\Classes\%s\shell\open\command" % scheme),
+        (winreg.HKEY_CLASSES_ROOT, r"%s\shell\open\command" % scheme),
+    )
+    for root, path in candidates:
+        try:
+            with winreg.OpenKey(root, path) as key:
+                value, _ = winreg.QueryValueEx(key, "")
+        except OSError:
+            continue
+        if str(value or "").strip():
+            return True
+    return False
+
+
 def telegram_proxy_url(entry):
     """把可用代理转换为 Telegram 可识别的深链。
 
@@ -523,13 +555,27 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             return
         url = telegram_proxy_url(entry)
+        # 先确认协议真的关联了程序：空壳 handler 下 os.startfile 会静默成功，
+        # 不校验就会一直返回 ok 而 Telegram 毫无反应
+        if not protocol_has_handler("tg"):
+            self._send_json({
+                "ok": False,
+                "error": "系统未正确注册 tg:// 协议，无法自动唤起 Telegram",
+                "url": url,
+                "hint": "已把链接放到下面的输入框，复制后在 Telegram 收藏夹里粘贴并点击；"
+                        "或在 Telegram 设置里搜索 registertg 重新注册协议",
+            })
+            return
         try:
             open_external_url(url)
         except OSError:
-            self._send_json(
-                {"ok": False, "error": "无法唤起 Telegram，请确认已安装 Telegram Desktop"},
-                status=500,
-            )
+            self._send_json({
+                "ok": False,
+                "error": "无法唤起 Telegram，请确认已安装 Telegram Desktop",
+                "url": url,
+                "hint": "复制链接后在 Telegram 收藏夹里粘贴并点击",
+            }, status=500)
+            return
             return
         self._send_json({"ok": True, "url": url})
 

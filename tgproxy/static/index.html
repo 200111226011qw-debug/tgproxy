@@ -256,6 +256,23 @@
   }
   .error-banner[hidden] { display: none; }
   .quit-screen { padding: 80px 24px; text-align: center; color: var(--text-2); }
+
+  /* tg:// 唤起失败时的复制兜底（协议未注册时 os.startfile 会静默失败） */
+  .tg-fallback {
+    position: fixed; left: 16px; right: 16px; bottom: 72px; z-index: 31;
+    background: #fff; border: 1px solid var(--border-strong); border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(16, 24, 40, .16); padding: 12px 14px;
+  }
+  .tg-fallback[hidden] { display: none; }
+  .tg-fallback .row {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .tg-fallback .msg { flex: 1 1 auto; font-size: 12.5px; color: #b54708; }
+  .tg-fallback input {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--border-strong);
+    border-radius: 8px; font-size: 12px; color: var(--text-2); background: #fafbfc;
+    font-family: ui-monospace, Consolas, monospace;
+  }
 </style>
 </head>
 <body>
@@ -357,6 +374,15 @@
 </div>
 
 <div class="error-banner" id="error-banner" hidden></div>
+
+<div class="tg-fallback" id="tg-fallback" hidden>
+  <div class="row">
+    <span class="msg" id="tg-fallback-msg"></span>
+    <button class="btn" id="tg-copy-btn" type="button">复制链接</button>
+    <button class="btn btn-ghost" id="tg-close-btn" type="button">关闭</button>
+  </div>
+  <input id="tg-link-input" type="text" readonly>
+</div>
 
 <script>
 (function () {
@@ -732,18 +758,44 @@
     }).then(function (data) {
       if (data && data.ok) {
         btn.textContent = "已唤起 Telegram";
+        return;
+      }
+      // 协议未注册时后端会带回 tg:// 链接，改为手动复制兜底
+      if (data && data.url) {
+        showTgFallback(data.error || "无法自动唤起 Telegram", data.url, data.hint);
+        btn.textContent = "请手动复制";
       } else {
         btn.textContent = (data && data.error) ? String(data.error).slice(0, 24) : "唤起失败";
-        setTimeout(function () { btn.textContent = "添加到 Telegram"; btn.disabled = false; }, 2500);
       }
+      setTimeout(function () { btn.textContent = "添加到 Telegram"; btn.disabled = false; }, 2500);
     }).catch(function () {
       btn.textContent = "唤起失败";
       setTimeout(function () { btn.textContent = "添加到 Telegram"; btn.disabled = false; }, 2500);
     });
   });
 
+  function showTgFallback(message, url, hint) {
+    $("tg-fallback-msg").textContent = hint ? (message + " — " + hint) : message;
+    $("tg-link-input").value = url;
+    $("tg-fallback").hidden = false;
+    $("tg-link-input").select();
+  }
+
   refreshBtn.addEventListener("click", refresh);
   $("save-interval-btn").addEventListener("click", saveSettings);
+
+  $("tg-copy-btn").addEventListener("click", function () {
+    var input = $("tg-link-input");
+    input.select();
+    copyText(input.value).then(function (ok) {
+      this.textContent = ok ? "已复制" : "复制失败，请手动选中";
+      var self = this;
+      setTimeout(function () { self.textContent = "复制链接"; }, 1600);
+    }.bind(this));
+  });
+  $("tg-close-btn").addEventListener("click", function () {
+    $("tg-fallback").hidden = true;
+  });
 
   $("toggle-right").addEventListener("click", function () {
     var app = $("app");

@@ -37,6 +37,11 @@ class _StubManager:
     def set_proxy_list_urls(self, urls):
         pass
 
+    def find_entry(self, host, port):
+        if host == "1.2.3.4" and int(port) == 1080:
+            return {"type": "socks5", "host": host, "port": int(port), "link": ""}
+        return None
+
 
 class _ForeignHandler(BaseHTTPRequestHandler):
     """冒充「别的软件占着端口」：200 但不是 tgproxy。"""
@@ -82,12 +87,17 @@ def _stop(server, thread):
     thread.join(3)
 
 
-def _request(port, path, method="GET", origin=None):
+def _request(port, path, method="GET", origin=None, payload=None):
+    data = None
     req = urllib.request.Request(
         "http://127.0.0.1:%d%s" % (port, path), method=method
     )
     if origin is not None:
         req.add_header("Origin", origin)
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        req.add_header("Content-Type", "application/json")
+        req.data = data
     try:
         with urllib.request.urlopen(req, timeout=3) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
@@ -276,6 +286,70 @@ def test_save_config_is_atomic():
         assert not os.path.exists(cfg_path + ".tmp")
     finally:
         app_module.CONFIG_PATH = old_path
+
+
+# --------------------------------------------------------------------------
+# TG 唤起：协议未注册时必须降级，不能静默返回成功
+# --------------------------------------------------------------------------
+
+def test_telegram_proxy_url_uses_socks_scheme_without_secret():
+    url = app_module.telegram_proxy_url(
+        {"type": "socks5", "host": "1.2.3.4", "port": 1080})
+    assert url == "tg://socks?server=1.2.3.4&port=1080"
+    # tg://proxy 只接受带 secret 的 MTProto 链接，SOCKS5 拼 secret 会被忽略
+    assert "secret" not in url
+
+
+def test_open_telegram_degrades_when_protocol_missing():
+    """空壳协议下 os.startfile 会静默成功，所以必须自己校验并降级。
+
+    这是实测踩到的：注册表里 HKCU\\Software\\Classes\\tg 存在但没有
+    shell\\open\\command，点按钮毫无反应，而后端返回了 ok=true。
+    """
+    server, thread, port = _serve_tgproxy()
+    opened = []
+    orig_check = app_module.protocol_has_handler
+    orig_open = app_module.open_external_url
+    app_module.protocol_has_handler = lambda scheme: False
+    app_module.open_external_url = lambda url: opened.append(url)
+    try:
+        status, body = _request(
+            port, "/api/open_telegram", method="POST",
+            origin="http://127.0.0.1:%d" % port,
+            payload={"host": "1.2.3.4", "port": 1080},
+        )
+    finally:
+        app_module.protocol_has_handler = orig_check
+        app_module.open_external_url = orig_open
+        _stop(server, thread)
+
+    assert status == 200
+    assert body.get("ok") is False
+    assert body.get("url") == "tg://socks?server=1.2.3.4&port=1080"
+    assert body.get("hint")
+    assert opened == [], "协议不可用时不该调用 startfile"
+
+
+def test_open_telegram_calls_startfile_when_protocol_ok():
+    server, thread, port = _serve_tgproxy()
+    opened = []
+    orig_check = app_module.protocol_has_handler
+    orig_open = app_module.open_external_url
+    app_module.protocol_has_handler = lambda scheme: True
+    app_module.open_external_url = lambda url: opened.append(url)
+    try:
+        status, body = _request(
+            port, "/api/open_telegram", method="POST",
+            origin="http://127.0.0.1:%d" % port,
+            payload={"host": "1.2.3.4", "port": 1080},
+        )
+    finally:
+        app_module.protocol_has_handler = orig_check
+        app_module.open_external_url = orig_open
+        _stop(server, thread)
+
+    assert status == 200 and body.get("ok") is True
+    assert opened == ["tg://socks?server=1.2.3.4&port=1080"]
 
 
 if __name__ == "__main__":
