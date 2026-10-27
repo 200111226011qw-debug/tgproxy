@@ -5,6 +5,7 @@ import com.tgproxy.data.KnownBadStore
 import com.tgproxy.data.KnownGoodStore
 import com.tgproxy.data.ProxyFetcher
 import com.tgproxy.data.ProxyRepository
+import com.tgproxy.data.RoundLogger
 import com.tgproxy.data.SettingsRepository
 import com.tgproxy.data.SettingsStore
 import java.io.File
@@ -29,6 +30,11 @@ class AppContainer(context: Context) {
     /** 连续失败拉黑文件（连续 3 轮不通跳过测试，48 小时后解封）。 */
     val knownBadStore: KnownBadStore by lazy {
         KnownBadStore(File(applicationContext.filesDir, "known_bad.json"))
+    }
+
+    /** 轮次记录文件（JSON Lines，每行一轮；日志页的数据源）。 */
+    val roundLogger: RoundLogger by lazy {
+        RoundLogger(File(applicationContext.filesDir, "rounds.jsonl"))
     }
 
     /** 代理仓储（OkHttp 抓取 + 真实 TCP 预筛 + TG 实测两关的生产组合）。 */

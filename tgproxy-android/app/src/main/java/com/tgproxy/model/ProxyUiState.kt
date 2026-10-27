@@ -18,6 +18,8 @@ package com.tgproxy.model
  * @property countdownStarted false 时倒计时显示「--」
  * @property settingsMessage 间隔保存结果提示（不自动清除，下次保存时覆盖）
  * @property settingsMessageIsError 保存提示是否为错误态
+ * @property logs 最近若干轮的记录（旧 → 新，最多 [com.tgproxy.Constants.ROUND_LOG_MAX_ENTRIES] 条）。
+ *   只有刷新结束后才变，不属于高频字段；界面展示时倒序。
  */
 data class ProxyUiState(
     val updatedAt: String? = null,
@@ -34,4 +36,5 @@ data class ProxyUiState(
     val countdownStarted: Boolean = false,
     val settingsMessage: String? = null,
     val settingsMessageIsError: Boolean = false,
+    val logs: List<RoundRecord> = emptyList(),
 )

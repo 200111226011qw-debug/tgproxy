@@ -97,6 +97,14 @@ object Constants {
      */
     const val KNOWN_GOOD_MAX_ENTRIES = 200
 
+    /**
+     * 轮次记录保留条数（`rounds.jsonl`）。
+     *
+     * 50 条按 10 分钟间隔约等于 8 小时的历史，够看清「刚才那几轮为什么失败」，
+     * 又不至于让文件无限增长 —— 每轮一行，写一次全量重写也只有 ~10KB。
+     */
+    const val ROUND_LOG_MAX_ENTRIES = 50
+
     /** 自动更新间隔默认值（分钟） */
     const val DEFAULT_INTERVAL_MINUTES = 10
 

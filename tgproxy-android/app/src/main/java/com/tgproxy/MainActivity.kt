@@ -23,7 +23,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private val viewModel: MainViewModel by viewModels {
-        MainViewModel.factory(container.proxyRepository, container.settingsStore)
+        MainViewModel.factory(
+            repository = container.proxyRepository,
+            settingsStore = container.settingsStore,
+            roundLogger = container.roundLogger,
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

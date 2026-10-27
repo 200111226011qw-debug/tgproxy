@@ -4,6 +4,7 @@ import com.tgproxy.model.ProxyEntry
 import com.tgproxy.model.ProxyStatus
 import com.tgproxy.model.ProxyType
 import com.tgproxy.model.ProxyUiState
+import com.tgproxy.model.RoundRecord
 import com.tgproxy.model.StageDurations
 import com.tgproxy.model.Stats
 import com.tgproxy.model.TgGateStats
@@ -91,6 +92,36 @@ internal val PreviewProxies = listOf(
     ),
 )
 
+/** 三条轮次记录：成功 / 成功带提示 / 失败，覆盖日志卡片的三种形态。 */
+internal val PreviewLogs = listOf(
+    RoundRecord(
+        timestamp = "2026-10-28 02:52:10",
+        success = true,
+        elapsedMs = 44_760,
+        stats = PreviewStats,
+        tgStats = PreviewTgStats,
+        durations = PreviewDurations,
+        seq = 1,
+    ),
+    RoundRecord(
+        timestamp = "2026-10-28 03:02:30",
+        success = true,
+        error = "本轮 0 个节点通过 TG 实测（门槛 1000ms），已保留上一轮列表",
+        elapsedMs = 51_200,
+        stats = PreviewStats.copy(available = 0, tgFailed = 271),
+        tgStats = PreviewTgStats.copy(ok = 0, webFail = 271),
+        durations = PreviewDurations,
+        seq = 2,
+    ),
+    RoundRecord(
+        timestamp = "2026-10-28 03:12:40",
+        success = false,
+        error = "抓取代理列表失败：全部 8 个数据源抓取失败",
+        elapsedMs = 120_400,
+        seq = 3,
+    ),
+)
+
 internal val PreviewUiState = ProxyUiState(
     updatedAt = "2026-10-28 03:12:40",
     fetching = false,
@@ -102,4 +133,5 @@ internal val PreviewUiState = ProxyUiState(
     proxies = PreviewProxies,
     countdownSec = 605,
     countdownStarted = true,
+    logs = PreviewLogs,
 )

@@ -101,6 +101,7 @@ fun MainScreen(
     // 走 rememberSaveable，进程被回收后也能恢复。
     val dashboardListState = rememberLazyListState()
     val nodesListState = rememberLazyListState()
+    val logsListState = rememberLazyListState()
 
     val showMessage: (String) -> Unit = { message ->
         scope.launch { snackbarHostState.showSnackbar(message) }
@@ -209,7 +210,10 @@ fun MainScreen(
                         listState = nodesListState,
                     )
 
-                    MainTab.LOGS -> LogsScreen()
+                    MainTab.LOGS -> LogsScreen(
+                        logs = uiState.logs,
+                        listState = logsListState,
+                    )
                 }
             }
         }

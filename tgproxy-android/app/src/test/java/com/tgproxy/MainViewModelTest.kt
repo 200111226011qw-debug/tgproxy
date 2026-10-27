@@ -474,6 +474,85 @@ class MainViewModelTest {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 轮次记录
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `每轮刷新都记一条，成功与失败都记`() = runTest(testDispatcher) {
+        val dir = java.io.File.createTempFile("rounds", "").let { it.delete(); it.mkdirs(); it }
+        // io 用测试调度器：否则 append 会跳到真实 IO 线程，虚拟时间推不动它，
+        // 断言只能靠 sleep 碰运气
+        val logger = com.tgproxy.data.RoundLogger(
+            java.io.File(dir, "rounds.jsonl"),
+            io = testDispatcher,
+        )
+        val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+            roundLogger = logger,
+        )
+        try {
+            advanceTimeBy(200)
+            assertEquals(1, viewModel.uiState.value.logs.size)
+            val ok = viewModel.uiState.value.logs.single()
+            assertTrue("成功轮应记 success=true", ok.success)
+            assertNull(ok.error)
+            assertEquals(1L, ok.seq)
+            // 日志里的统计要与本轮 uiState 一致（同一份数据，不许各算一遍）
+            assertEquals(viewModel.uiState.value.stats.tested, ok.stats.tested)
+            assertEquals(viewModel.uiState.value.tgStats, ok.tgStats)
+
+            // 失败一轮：也要留痕，且不填统计（阶段没跑完，填 0 会被读成「测了 0 个」）
+            source.nextError = IOException("boom")
+            viewModel.refresh()
+            advanceTimeBy(200)
+            assertEquals(2, viewModel.uiState.value.logs.size)
+            val failed = viewModel.uiState.value.logs.last()
+            assertFalse("失败轮应记 success=false", failed.success)
+            assertTrue("失败原因要落进日志：${failed.error}", failed.error!!.contains("boom"))
+            assertEquals(0, failed.stats.tested)
+            assertEquals(2L, failed.seq)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
+    @Test
+    fun `冷启动读取历史轮次`() = runTest(testDispatcher) {
+        val dir = java.io.File.createTempFile("rounds", "").let { it.delete(); it.mkdirs(); it }
+        val file = java.io.File(dir, "rounds.jsonl")
+        // 预置两条历史（直接走 logger 写，保证格式与生产一致）
+        com.tgproxy.data.RoundLogger(file, io = testDispatcher).apply {
+            append(com.tgproxy.model.RoundRecord(timestamp = "2026-10-28 01:00:00", success = true, seq = 0))
+            append(com.tgproxy.model.RoundRecord(timestamp = "2026-10-28 02:00:00", success = false, seq = 0))
+        }
+
+        val gate = CompletableDeferred<Unit>()
+        val source = FakeSource().apply {
+            this.gate = gate
+            nextText = "socks5://1.2.3.4:1080"
+        }
+        val viewModel = MainViewModel(
+            repository = ProxyRepository(source, FakeTester(), FakeGate(), ioDispatcher = testDispatcher),
+            settingsStore = FakeSettingsStore(),
+            timeSource = FakeTimeSource(),
+            roundLogger = com.tgproxy.data.RoundLogger(file, io = testDispatcher),
+        )
+        try {
+            advanceTimeBy(100)
+            // 首轮还挂在 gate 上，历史已经先进来了
+            assertEquals(2, viewModel.uiState.value.logs.size)
+            assertEquals("2026-10-28 02:00:00", viewModel.uiState.value.logs.last().timestamp)
+            gate.complete(Unit)
+            advanceTimeBy(200)
+        } finally {
+            viewModel.viewModelScope.cancel()
+        }
+    }
+
     @Test
     fun `known_good 开关切换会持久化并立即生效`() = runTest(testDispatcher) {
         val source = FakeSource().apply { nextText = "socks5://1.2.3.4:1080" }

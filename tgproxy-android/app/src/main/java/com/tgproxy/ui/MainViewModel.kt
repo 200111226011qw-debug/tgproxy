@@ -6,10 +6,15 @@ import androidx.lifecycle.viewModelScope
 import com.tgproxy.Constants
 import com.tgproxy.data.ProxyRepository
 import com.tgproxy.data.ProxyRepository.RefreshResult
+import com.tgproxy.data.RoundLogger
 import com.tgproxy.data.SettingsStore
 import com.tgproxy.model.ProxyUiState
 import com.tgproxy.model.RefreshProgress
+import com.tgproxy.model.RoundRecord
 import com.tgproxy.model.Settings
+import com.tgproxy.model.StageDurations
+import com.tgproxy.model.Stats
+import com.tgproxy.model.TgGateStats
 import com.tgproxy.model.ThemeMode
 import com.tgproxy.model.parseIntervalInput
 import kotlinx.coroutines.CancellationException
@@ -49,6 +54,8 @@ class MainViewModel(
     private val repository: ProxyRepository,
     private val settingsStore: SettingsStore,
     private val timeSource: TimeSource = TimeSource { System.nanoTime() },
+    /** 轮次记录存储；默认禁用态（不读不写），生产由 AppContainer 注入真实文件。 */
+    private val roundLogger: RoundLogger = RoundLogger.none(),
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ProxyUiState())
@@ -84,6 +91,15 @@ class MainViewModel(
     private var intervalSec: Long = Constants.DEFAULT_INTERVAL_MINUTES * 60L
 
     init {
+        // 先读历史轮次：冷启动进日志页就有内容，不用等下一轮刷新
+        viewModelScope.launch {
+            val recent = roundLogger.load()
+            // 只在本轮还没写入任何记录时填充：刷新可能已经先落了一条，
+            // 别用旧历史把它盖掉（与 known_good 先行展示同一套守卫思路）
+            if (recent.isNotEmpty() && _uiState.value.logs.isEmpty()) {
+                _uiState.value = _uiState.value.copy(logs = recent)
+            }
+        }
         viewModelScope.launch {
             settingsStore.settings.collect { newSettings ->
                 val intervalChanged =
@@ -132,6 +148,8 @@ class MainViewModel(
     private suspend fun refreshAwait() {
         if (!refreshMutex.tryLock()) return
         val startedNanos = timeSource.nowNanos()
+        // 本轮记录：在锁内组装，锁外落盘（见 finally 之后的注释）
+        var record: RoundRecord? = null
         try {
             _uiState.value = _uiState.value.copy(fetching = true, error = null)
             _progress.value = null
@@ -139,36 +157,41 @@ class MainViewModel(
                 // 只写独立通道，绝不碰 _uiState —— 这条路径每轮要跑上千次
                 _progress.value = progress
             }
-            when (val result = repository.refresh(resolveUrls(_settings.value), onProgress)) {
+            val result = repository.refresh(resolveUrls(_settings.value), onProgress)
+            // 本轮耗时在这里统一算：成功/失败都要，且日志与 lastDurationMs 用同一个数
+            val elapsedMs = (timeSource.nowNanos() - startedNanos) / 1_000_000L
+            // 成功轮也可能带提示（0 达标保留旧列表）；它就是界面那根横幅的文案
+            var note: String? = null
+            when (result) {
                 is RefreshResult.Success -> {
                     val previous = _uiState.value.proxies
-                    val durationMs = (timeSource.nowNanos() - startedNanos) / 1_000_000L
                     if (result.entries.isNotEmpty()) {
                         _uiState.value = _uiState.value.copy(
                             proxies = repository.sortProxies(result.entries),
                             stats = result.stats,
                             updatedAt = result.updatedAt,
-                            lastDurationMs = durationMs,
+                            lastDurationMs = elapsedMs,
                             tgStats = result.gateStats,
                             durations = result.durations,
                             error = null,
                         )
                     } else if (previous.isNotEmpty()) {
                         // 本轮 0 达标：保留上一轮列表（等价桌面版）
+                        note = "本轮 0 个节点通过 TG 实测（门槛 ${Constants.TG_LATENCY_LIMIT_MS}ms），已保留上一轮列表"
                         _uiState.value = _uiState.value.copy(
                             stats = result.stats,
                             updatedAt = result.updatedAt,
-                            lastDurationMs = durationMs,
+                            lastDurationMs = elapsedMs,
                             tgStats = result.gateStats,
                             durations = result.durations,
-                            error = "本轮 0 个节点通过 TG 实测（门槛 ${Constants.TG_LATENCY_LIMIT_MS}ms），已保留上一轮列表",
+                            error = note,
                         )
                     } else {
                         _uiState.value = _uiState.value.copy(
                             proxies = emptyList(),
                             stats = result.stats,
                             updatedAt = result.updatedAt,
-                            lastDurationMs = durationMs,
+                            lastDurationMs = elapsedMs,
                             tgStats = result.gateStats,
                             durations = result.durations,
                             error = null,
@@ -177,13 +200,35 @@ class MainViewModel(
                 }
                 is RefreshResult.Failure -> {
                     // 失败降级：仅更新 error，proxies/stats/updatedAt 原样保留（P0-1/P0-9）
+                    note = result.error
                     _uiState.value = _uiState.value.copy(error = result.error)
                 }
             }
+            // 轮次记录：成功失败都记。失败轮不填 stats/durations —— 阶段没跑完，
+            // 填 0 会被读成「测了 0 个」，不如留空让界面只显示耗时与错误。
+            // 这里只组装（纯内存），落盘放到互斥区外。
+            record = RoundRecord(
+                timestamp = RoundLogger.formatTimestamp(System.currentTimeMillis()),
+                success = result is RefreshResult.Success,
+                error = note,
+                elapsedMs = elapsedMs,
+                stats = (result as? RefreshResult.Success)?.stats ?: Stats(),
+                tgStats = (result as? RefreshResult.Success)?.gateStats ?: TgGateStats(),
+                durations = (result as? RefreshResult.Success)?.durations ?: StageDurations(),
+            )
         } finally {
             _uiState.value = _uiState.value.copy(fetching = false)
             _progress.value = null
             refreshMutex.unlock()
+        }
+        // 落盘放在互斥区外：一次文件写入不该决定「下一轮能不能开始」。
+        // 放在 finally 里的话，锁的释放要等 append 从 IO 线程切回来 ——
+        // 生产上只是多占几毫秒，测试里（虚拟时间）会让下一轮 refresh 直接被
+        // tryLock 挡掉，整串用例连锁失败。
+        val pending = record ?: return
+        val logs = roundLogger.append(pending)
+        if (logs.isNotEmpty()) {
+            _uiState.value = _uiState.value.copy(logs = logs)
         }
     }
 
@@ -307,13 +352,14 @@ class MainViewModel(
         fun factory(
             repository: ProxyRepository,
             settingsStore: SettingsStore,
+            roundLogger: RoundLogger,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 require(modelClass.isAssignableFrom(MainViewModel::class.java)) {
                     "Unknown ViewModel class: ${modelClass.name}"
                 }
-                return MainViewModel(repository, settingsStore) as T
+                return MainViewModel(repository, settingsStore, roundLogger = roundLogger) as T
             }
         }
     }
