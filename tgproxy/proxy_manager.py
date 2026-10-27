@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
+import round_log
+
 logger = logging.getLogger("tgproxy.proxy_manager")
 
 
@@ -743,6 +745,24 @@ def summarize_tg_gates(samples):
     return summary
 
 
+def _gate_counts(summary):
+    """把 `summarize_tg_gates` 的分布压成四个计数（轮次记录用）。
+
+    桌面端的桶比安卓端多一个 `deadline`（第一关耗尽预算、第二关没来得及跑）。
+    日志里把它并进 `web_fail` —— 安卓端 `TgGateStage.WEB_FAIL` 的定义就是
+    「含第二关没来得及跑」。不并的话四个计数之和会小于 total，两端漏斗对不上。
+    """
+    def count(key):
+        return int((summary.get(key) or {}).get("count", 0))
+
+    return {
+        "dc_fail": count("dc_fail"),
+        "latency_rejected": count("latency_rejected"),
+        "web_fail": count("web_fail") + count("deadline"),
+        "ok": count("ok"),
+    }
+
+
 def sort_proxies(proxies):
     """TG 实测通过的在前按 TG 延迟升序，未验证的（MTProto）分组在后。"""
     def sort_key(item):
@@ -763,7 +783,8 @@ class ProxyManager:
 
     def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS,
                  known_good_path=None, source_health_path=None, known_bad_path=None,
-                 on_sources_changed=None, known_good_enabled=True, _clock=None):
+                 on_sources_changed=None, known_good_enabled=True, _clock=None,
+                 rounds_path=None):
         self._lock = threading.RLock()  # 可重入：体检全程持锁，内部再取锁不致死锁
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
         self._max_tg_latency_ms = max_tg_latency_ms
@@ -771,6 +792,9 @@ class ProxyManager:
         self._known_good_enabled = bool(known_good_enabled)
         self._source_health_path = source_health_path
         self._known_bad_path = known_bad_path
+        # 轮次记录（rounds.jsonl）：与安卓端同一份契约。路径为空则完全不记。
+        self._rounds_path = rounds_path
+        self._rounds = round_log.load_rounds(rounds_path)
         self._clock = _clock or time.time  # 可注入时钟：单测虚拟推进解封判定
         self._known_bad = {}  # "host:port" -> {"fails": 连败数, "last_fail": 时间戳}
         self._on_sources_changed = on_sources_changed
@@ -850,6 +874,9 @@ class ProxyManager:
                 "progress": dict(self._live_progress),
                 "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
+                # 最近 20 轮（旧 → 新）。磁盘上留 50 条，状态里只带 20 条：
+                # /api/proxies 每秒轮询一次，50 条会让每次响应多背 10KB。
+                "rounds": [dict(item) for item in self._rounds[-20:]],
             }
 
     def refresh_async(self):
@@ -867,8 +894,10 @@ class ProxyManager:
                 return False
             self._fetching = True
             self._error = None
+        started = time.perf_counter()
+        extra = None
         try:
-            self._run_refresh()
+            extra = self._run_refresh()
         except Exception as exc:  # 兜底：任何异常都要落到 _error，UI 才能感知
             with self._lock:
                 self._error = "刷新过程发生异常：%s" % exc
@@ -878,7 +907,58 @@ class ProxyManager:
             # 无论成功、异常还是提前退出，进度都必须回到 idle，否则界面会卡在
             # 一个永远不动的阶段上
             self._set_progress("idle", 0, 0)
+        # 轮次记录放在 finally 之后、锁之外：一次文件写入不该拖住 /api/proxies。
+        # 安卓端在这里踩过坑（锁内 IO 导致锁不释放），Python 侧同一位置同样避开。
+        self._log_round(extra, (time.perf_counter() - started) * 1000.0)
         return True
+
+    def _log_round(self, extra, elapsed_ms):
+        """把本轮落成一条 rounds.jsonl。失败轮也记，任何异常都吞掉。
+
+        :param extra: `_run_refresh` 返回的派生量；None 表示本轮抛异常、统计不可信
+        """
+        if not self._rounds_path:
+            return
+        try:
+            with self._lock:
+                stats = dict(self._stats)
+                stages = dict(self._stage_durations)
+                gates = dict(self._tg_gate_stats)
+                error = self._error
+            if extra is None:
+                # 异常退出：阶段没跑完，统计一律归零（与安卓端失败轮一致），
+                # 别拿上一轮的数字充数
+                ok, stats_for_log, gates_for_log, stages_for_log = False, {}, {}, {}
+            else:
+                over = int(extra.get("over_threshold") or 0)
+                stats_for_log = {
+                    "available": stats.get("available", 0),
+                    "unverified": stats.get("unverified", 0),
+                    # 日志口径：两关失败**不含**超门槛（见 round_log 模块注释）
+                    "tg_failed": max(0, stats.get("tg_failed", 0) - over),
+                    "over_threshold": over,
+                    "dropped": stats.get("dropped", 0),
+                    "excluded": stats.get("excluded", 0),
+                    "blacklisted": stats.get("blacklisted", 0),
+                    "tested": int(extra.get("tested") or 0),
+                }
+                gates_for_log = _gate_counts(gates)
+                stages_for_log = stages
+                # 全源抓取失败算失败：安卓端那种情况是抛异常 → Failure
+                ok = not extra.get("fetch_failed_all")
+            record = round_log.build_record(
+                ok=ok,
+                error=error,
+                elapsed_ms=elapsed_ms,
+                stats=stats_for_log,
+                tg_stats=gates_for_log,
+                stage_durations=stages_for_log,
+            )
+            merged = round_log.append_round(self._rounds_path, record)
+            with self._lock:
+                self._rounds = merged
+        except Exception:
+            logger.exception("轮次记录落盘失败（不影响本轮结果）")
 
     def _fetch_one(self, url):
         """抓取单个数据源，返回源状态记录（含文本）。"""
@@ -1070,6 +1150,14 @@ class ProxyManager:
         stages["total"] = time.perf_counter() - round_started
         with self._lock:
             self._stage_durations = {k: round(v, 3) for k, v in stages.items()}
+        # 供轮次记录用的派生量。不塞进 _stats：_stats 是 /api/proxies 的公开字段，
+        # 改它的口径会牵动 Web UI 的既有算式（见 round_log 模块注释）。
+        return {
+            "fetch_failed_all": bool(failures) and len(failures) == len(urls),
+            "tested": len(tested),
+            # 两关通过（tg_ok=True）但延迟超门槛 → 没进 kept 的那部分
+            "over_threshold": len(verified_ok) - len(kept),
+        }
 
     def _load_known_good(self):
         """读取上轮验证通过的节点（known_good.json；缺失/损坏返回空表）。"""

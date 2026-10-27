@@ -235,6 +235,27 @@
   .gate-row .p50 { width: 62px; text-align: right; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
   .swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
 
+  /* 运行日志：右栏窄，一行内塞下「时间 / 成败 / 摘要 / 耗时」 */
+  .round-list { display: flex; flex-direction: column; gap: 2px; max-height: 248px; overflow-y: auto; }
+  .round-row {
+    display: flex; align-items: center; gap: 6px; font-size: 12px;
+    padding: 4px 0; border-bottom: 1px dashed var(--border);
+  }
+  .round-row:last-child { border-bottom: 0; }
+  .round-row .ts { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .round-row .tag {
+    flex: none; font-size: 10.5px; font-weight: 700; line-height: 1.5;
+    padding: 0 5px; border-radius: 5px;
+  }
+  .round-row .tag.ok { color: var(--green); background: var(--green-soft); }
+  .round-row .tag.fail { color: var(--red); background: var(--red-soft); }
+  .round-row .sum {
+    flex: 1 1 auto; min-width: 0; color: var(--text-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .round-row .warn { color: var(--amber); flex: none; }
+  .round-row .dur { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
   .source-row { display: flex; align-items: center; gap: 7px; font-size: 12px; padding: 3px 0; }
   .source-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
   .source-link {
@@ -369,6 +390,11 @@
       <div class="panel-title"><span>数据源</span><span class="hint" id="source-summary">—</span></div>
       <div id="source-urls"></div>
       <div id="source-notice" class="notice-box" style="margin-top:8px" hidden></div>
+    </section>
+
+    <section>
+      <div class="panel-title"><span>运行日志</span><span class="hint" id="round-count">—</span></div>
+      <div class="round-list" id="round-list"></div>
     </section>
   </aside>
 </div>
@@ -565,6 +591,39 @@
     box.innerHTML = html;
   }
 
+  /* ---------- 右栏：运行日志（rounds.jsonl 最近 20 轮） ---------- */
+  /**
+   * 后端只回最近 20 轮（磁盘留 50 条，状态里只带 20 条，省得每次轮询多背 10KB）。
+   * 新的排上面：`rounds` 是旧 → 新，这里 reverse。
+   * 成功轮也可能带 error（如「本轮 0 达标已保留旧列表」），那种情况用 ⚠ 标出来，
+   * 完整文案放 title —— 右栏一行塞不下，但也不能当没发生。
+   */
+  function renderRounds(rounds) {
+    var box = $("round-list");
+    rounds = rounds || [];
+    $("round-count").textContent = rounds.length ? (rounds.length + " 轮") : "—";
+    if (!rounds.length) {
+      box.innerHTML = '<div class="muted" style="font-size:12px">还没有轮次记录，跑完一轮后显示</div>';
+      return;
+    }
+    var html = "";
+    rounds.slice().reverse().forEach(function (r) {
+      var s = r.stats || {};
+      var note = r.error || "";
+      var sum = r.ok
+        ? ("可用 " + (s.available || 0) + " / 测 " + (s.tested || 0))
+        : (note || "未完成");
+      html += '<div class="round-row" title="' + escapeHtml(r.ts + (note ? " · " + note : "")) + '">' +
+        '<span class="ts">' + escapeHtml(String(r.ts || "").slice(5)) + '</span>' +
+        '<span class="tag ' + (r.ok ? "ok" : "fail") + '">' + (r.ok ? "成功" : "失败") + '</span>' +
+        '<span class="sum">' + escapeHtml(sum) + '</span>' +
+        (r.ok && note ? '<span class="warn" title="' + escapeHtml(note) + '">⚠</span>' : '') +
+        '<span class="dur">' + fmtDuration((r.elapsed_ms || 0) / 1000) + '</span>' +
+        '</div>';
+    });
+    box.innerHTML = html;
+  }
+
   /* ---------- 右栏：数据源 ---------- */
   /**
    * raw.githubusercontent.com 在国内直连打不开，点链接等于点了没反应。
@@ -638,6 +697,7 @@
     renderSources(data.sources);
     renderStages(data.stage_durations);
     renderGates(data.tg_gate_stats);
+    renderRounds(data.rounds);
     renderNotice(data.notice);
 
     if (data.error) { errorBanner.textContent = data.error; errorBanner.hidden = false; }
