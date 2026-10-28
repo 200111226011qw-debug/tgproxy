@@ -36,6 +36,31 @@
 
 > 环境要求：JDK 17；Android SDK Platform 35；`local.properties` 中配置 `sdk.dir`（不入库，Android Studio 会自动生成）。
 
+### ⚠️ 必须从 ASCII 路径构建（中文路径下测试跑不起来）
+
+工程所在路径含中文（本机用户名是中文）时，**Gradle 的测试 worker JVM 起不来**：
+它把命令行写进 `@argfile`，而 JDK 17 按系统 ANSI 代码页（GBK）解码 `@argfile`，
+路径里的中文被读成乱码 → worker 连引导类 `worker...GradleWorkerMain` 都加载不到，
+表现为 `ClassNotFoundException` 或 `Gradle Test Executor N finished with non-zero exit value 1`。
+
+> 这不是测试失败，是 worker 根本没起来。**每次失败都是 11~15 个套件一起报 `ClassNotFoundException`**。
+
+`assembleRelease` 不受影响（不经过 test worker），所以会出现「APK 出来了但状态是 FAILED」的错觉。
+
+**解法：让 Gradle 看到纯 ASCII 路径。** 本机已建好 junction：
+
+```powershell
+# 工程与 Gradle 环境都指向 ASCII 路径
+$env:JAVA_HOME='C:\btg\jdk\jdk-17.0.20.1+1'
+$env:ANDROID_HOME='C:\btg\sdk'
+$env:GRADLE_USER_HOME='C:\btg\gradle-home'
+& 'C:\btg\gradle\gradle-8.9\bin\gradle.bat' -p 'C:\btg\tgproxy-live' `
+  --no-daemon --console=plain --init-script 'C:\btg\mirror.init.gradle' :app:testDebugUnitTest
+```
+
+`C:\btg\tgproxy-live` 是指向本工程目录的 junction（`New-Item -ItemType Junction`），
+构建产物仍然写回工程目录本身。校验基线：**125 例全绿**（15 个套件）。
+
 ### 正式签名构建（release keystore）
 
 签名材料**不入库**：密钥文件放仓库外，`keystore.properties` 已被 `.gitignore` 忽略，
