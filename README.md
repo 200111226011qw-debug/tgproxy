@@ -60,13 +60,35 @@ raw.githubusercontent.com 直连失败时自动依次回退 cdn / gcore / fastly
 
 ## 版本与发布
 
-v2.1.0 及以后版本的 Release 正文归档在 [`docs/release-notes/`](docs/release-notes/)，与 GitHub 上的 Release 正文**逐字节一致**（从 API 取回，不是另写一份）。更早的版本仍以 GitHub Releases 上的正文为准。
+v1.1.0 起、线上正文非空的版本，Release 正文均已归档在 [`docs/release-notes/`](docs/release-notes/)，与 GitHub 上的 Release 正文**逐字节一致**（从 API 取回，不是另写一份）。
 
 | 版本 | 要点 | 归档 |
 |---|---|---|
 | v2.2.1 | 商店版 Telegram 唤起假阴性修复；状态文件收敛到 `data/`；限制内置窗口体积 | [v2.2.1.md](docs/release-notes/v2.2.1.md) |
 | v2.2.0 | 桌面独立窗口（浏览器 `--app` 模式，零新依赖）；关窗口即退出；唤起兜底 | [v2.2.0.md](docs/release-notes/v2.2.0.md) |
 | v2.1.0 | 双端数据契约对齐；性能收官（中位 127.63s → 44.76s） | [v2.1.0.md](docs/release-notes/v2.1.0.md) |
+
+更早的版本同样已归档（要点取自线上 Release 名称）：
+
+| 版本 | 要点 | 归档 |
+|---|---|---|
+| v1.9.0 | 连败拉黑（双端） | [v1.9.0.md](docs/release-notes/v1.9.0.md) |
+| v1.8.0 | known_good 沉淀开关 | [v1.8.0.md](docs/release-notes/v1.8.0.md) |
+| v1.7.3 | 复核收口（文档对齐 + N=4 回归用例） | [v1.7.3.md](docs/release-notes/v1.7.3.md) |
+| v1.7.2 | 复核收口（小 N 兜底 + 锁覆盖 + 文档对齐） | [v1.7.2.md](docs/release-notes/v1.7.2.md) |
+| v1.7.1 | 复核修复（宽恕可达性 + 比例判定 + 版本号对齐） | [v1.7.1.md](docs/release-notes/v1.7.1.md) |
+| v1.7.0 | 复核修复 + 安卓首个 APK | [v1.7.0.md](docs/release-notes/v1.7.0.md) |
+| v1.6.0 | 源自动体检与换源 | [v1.6.0.md](docs/release-notes/v1.6.0.md) |
+| v1.5.0 | 评审修复版（P0 + 安全加固 + known_good） | [v1.5.0.md](docs/release-notes/v1.5.0.md) |
+| v1.4.1 | 修复一键唤起 Telegram 无效 | [v1.4.1.md](docs/release-notes/v1.4.1.md) |
+| v1.4.0 | 延迟门槛 1000ms + 爬虫抓取模式 | [v1.4.0.md](docs/release-notes/v1.4.0.md) |
+| v1.3.0 | TG 实测选节点 | [v1.3.0.md](docs/release-notes/v1.3.0.md) |
+| v1.2.0 | 自动剔除失效节点 + 一键唤起 Telegram | [v1.2.0.md](docs/release-notes/v1.2.0.md) |
+| v1.1.0 | 多数据源 + 镜像回退 | [v1.1.0.md](docs/release-notes/v1.1.0.md) |
+| android-v2.1.0 | 仪表盘视觉 + 连败拉黑 | [android-v2.1.0.md](docs/release-notes/android-v2.1.0.md) |
+| android-v2.0.0 | TG 实测双闸 + 1000ms 门槛 + known_good + 界面重做 | [android-v2.0.0.md](docs/release-notes/android-v2.0.0.md) |
+
+`version-release-client-v1.0.0` 的线上 Release 正文为空（0 字符），没有内容可归档，其产物仍以下方 Releases 页面的 asset 为准。
 
 二进制产物在 [GitHub Releases](https://github.com/200111226011qw-debug/tgproxy/releases) 下载。
 安卓版目前仍是 **Debug 签名包**（未建 release keystore），源码可直接构建。

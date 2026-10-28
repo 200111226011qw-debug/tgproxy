@@ -117,7 +117,7 @@ hashlib.sha256(b.replace(b'\r\n', b'\n')).hexdigest()
 对状态机类逻辑枚举参数组合，各连续 N 轮，读**落盘状态**（不是内存态）断言：
 
 ```
-源数 1~5 × 零产出数 0~n，各跑 3 轮，读 source_health.json 的 parked 字段
+源数 1~5 × 零产出数 0~n，各跑 3 轮，读 data/source_health.json 的 parked 字段
 ```
 
 > 这招抓出过「4 源 3 零（75%）本应保护却换掉 3 个源」——单点测试看不出来。
