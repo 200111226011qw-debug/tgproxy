@@ -29,8 +29,32 @@ else:
     RESOURCE_DIR = BASE_DIR
 STATIC_DIR = os.path.join(RESOURCE_DIR, "static")
 VERSION_PATH = os.path.join(RESOURCE_DIR, "VERSION")
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-LOG_PATH = os.path.join(BASE_DIR, "tgproxy.log")
+# 所有可变状态（配置 / 节点缓存 / 轮次日志 / 运行日志）统一放程序目录下的 data/，
+# 程序目录里只剩 exe 和 data/ —— 想搬到别处，整个文件夹拷走就行。
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+CONFIG_PATH = os.path.join(DATA_DIR, "config.json")
+LOG_PATH = os.path.join(DATA_DIR, "tgproxy.log")
+
+# 旧版把状态文件平铺在程序目录里；首次启动时搬进 data/（不覆盖 data/ 里已有的）
+_LEGACY_STATE_FILES = ("config.json", "tgproxy.log", "known_good.json",
+                       "known_bad.json", "source_health.json", "rounds.jsonl")
+
+
+def ensure_data_dir():
+    """建 data/ 并把旧版平铺的状态文件搬进去。幂等，可重复调用。"""
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+    except OSError:
+        return
+    for name in _LEGACY_STATE_FILES:
+        old = os.path.join(BASE_DIR, name)
+        new = os.path.join(DATA_DIR, name)
+        if os.path.isfile(old) and not os.path.exists(new):
+            try:
+                os.replace(old, new)
+            except OSError:
+                pass
 INDEX_FILE = os.path.join(STATIC_DIR, "index.html")
 
 # UI 窗口用的独立浏览器 profile（见 open_app_window）。
@@ -791,7 +815,13 @@ def open_app_window(address):
              "--window-size=1280,820",
              "--user-data-dir=%s" % profile,
              "--no-first-run",
-             "--no-default-browser-check"],
+             "--no-default-browser-check",
+             # 这个 profile 只为本地页面服务，不需要缓存和后台下载。
+             # 不加这几条时实测涨到 485 MB（Default 393M + component_crx_cache 25M
+             # + Edge 的实体抽取/购物/语言模型各几十 MB）—— 一个本地工具不该吃半 G。
+             "--disk-cache-size=134217728",
+             "--disable-background-networking",
+             "--disable-component-update"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -801,6 +831,7 @@ def open_app_window(address):
 
 
 def main():
+    ensure_data_dir()
     setup_logging()
     config = load_config()
 
@@ -833,10 +864,10 @@ def main():
     manager = ProxyManager(
         config["proxy_list_urls"],
         config["max_tg_latency_ms"],
-        known_good_path=os.path.join(BASE_DIR, "known_good.json"),
-        source_health_path=os.path.join(BASE_DIR, "source_health.json"),
-        known_bad_path=os.path.join(BASE_DIR, "known_bad.json"),
-        rounds_path=os.path.join(BASE_DIR, "rounds.jsonl"),
+        known_good_path=os.path.join(DATA_DIR, "known_good.json"),
+        source_health_path=os.path.join(DATA_DIR, "source_health.json"),
+        known_bad_path=os.path.join(DATA_DIR, "known_bad.json"),
+        rounds_path=os.path.join(DATA_DIR, "rounds.jsonl"),
         on_sources_changed=lambda urls: persist_active_urls(config, urls),
         known_good_enabled=config["known_good_enabled"],
     )

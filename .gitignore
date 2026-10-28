@@ -29,6 +29,8 @@ captures/
 # PyInstaller（桌面版打包产物）
 dist/
 build/
+# 历史版本的 exe 备份（换版时把旧产物挪到这里，避免和当前 dist/ 混在一起）
+_archive/
 # tgproxy/tgproxy.spec 已刻意入库（-f 强制添加），以保证从 tag 可重建 exe；
 # 本行仅忽略将来新增的其他 spec
 *.spec
