@@ -54,6 +54,13 @@ android {
         }
     }
 
+    lint {
+        // release 默认会跑 lintVital，它要联网拉 lint-gradle / groovy / kotlin-reflect。
+        // 受限网络下解析不到 Maven Central，assembleRelease 会在**打包之后**失败 ——
+        // APK 其实已经产出，但构建状态是 FAILED，容易误判成编译错误。
+        // 这里关掉 release 的 lint 门禁；需要 lint 时单独跑 `gradle lint`。
+        checkReleaseBuilds = false
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
