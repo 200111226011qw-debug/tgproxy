@@ -39,3 +39,6 @@ _archive/
 *.jks
 *.keystore
 keystore.properties
+
+# Kotlin 2.x 构建缓存
+.kotlin/
