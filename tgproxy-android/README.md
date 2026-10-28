@@ -31,9 +31,27 @@
 # JDK 17 环境下
 ./gradlew :app:assembleDebug        # 构建 Debug APK
 ./gradlew :app:testDebugUnitTest    # 运行 JVM 单元测试（对拍桌面版行为）
+./gradlew :app:assembleRelease      # 构建 Release APK（没有密钥材料时产物为未签名）
 ```
 
 > 环境要求：JDK 17；Android SDK Platform 35；`local.properties` 中配置 `sdk.dir`（不入库，Android Studio 会自动生成）。
+
+### 正式签名构建（release keystore）
+
+签名材料**不入库**：密钥文件放仓库外，`keystore.properties` 已被 `.gitignore` 忽略，
+样例见 [`keystore.properties.sample`](keystore.properties.sample)。取值优先级为**环境变量 > `keystore.properties`**：
+
+| 环境变量 | 对应字段 |
+|---|---|
+| `TGPROXY_KEYSTORE` | `storeFile`（密钥文件绝对路径） |
+| `TGPROXY_STORE_PASSWORD` | `storePassword` |
+| `TGPROXY_KEY_ALIAS` | `keyAlias` |
+| `TGPROXY_KEY_PASSWORD` | `keyPassword` |
+
+两者都没有时，`release` 构建类型保持**未签名**（产出 `app-release-unsigned.apk`），构建不会失败。
+
+> **密钥丢了就永久无法再更新这个应用**（未上架应用商店，没有第三方托管签名）。生成后请离线备份一份。
+> 正式签名包与历史 Debug 包**签名不同、applicationId 相同**，老用户必须先卸载旧版再安装。
 
 ## 工程结构
 
