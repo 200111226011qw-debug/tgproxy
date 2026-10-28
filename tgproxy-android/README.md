@@ -47,7 +47,7 @@
 
 `assembleRelease` 不受影响（不经过 test worker），所以会出现「APK 出来了但状态是 FAILED」的错觉。
 
-**解法：让 Gradle 看到纯 ASCII 路径。** 本机已建好 junction：
+**解法：让 Gradle 看到纯 ASCII 路径。** 下面示例是**本机**布局（换成任意纯 ASCII 路径同理），本机已建好 junction：
 
 ```powershell
 # 工程与 Gradle 环境都指向 ASCII 路径
@@ -108,13 +108,16 @@ $env:GRADLE_USER_HOME='C:\btg\gradle-home'
 没有第三方托管签名）。换 `applicationId` 等于换一个 App，老用户卸载重装、数据全丢。
 
 ```bat
-mkdir C:\btg\keys
-"C:\btg\jdk\jdk-17.0.20.1+1\bin\keytool.exe" -genkeypair -v ^
-  -keystore "C:\btg\keys\tgproxy-release.jks" ^
+mkdir "%USERPROFILE%\.android"
+"%JAVA_HOME%\bin\keytool.exe" -genkeypair -v ^
+  -keystore "%USERPROFILE%\.android\tgproxy-release.jks" ^
   -storetype PKCS12 -keyalg RSA -keysize 4096 -validity 10000 ^
   -alias tgproxy-release ^
   -dname "CN=TGProxy, OU=Personal, O=kkf, C=CN"
 ```
+
+> 上面的**参数是建议值**（PKCS12 / RSA 4096 / 10000 天）。硬性要求只有两条：
+> **密钥文件放在仓库外**、**口令不进命令行**。
 
 口令由 keytool **交互式询问**（不传 `-storepass`，口令就不会进命令行历史）。
 备份到**两个不同的地方**；备份完把明文口令文件删掉，口令进密码管理器。
