@@ -34,3 +34,8 @@ _archive/
 # tgproxy/tgproxy.spec 已刻意入库（-f 强制添加），以保证从 tag 可重建 exe；
 # 本行仅忽略将来新增的其他 spec
 *.spec
+
+# Android 签名材料：私钥与口令绝不能进仓库
+*.jks
+*.keystore
+keystore.properties
