@@ -98,6 +98,66 @@ $env:GRADLE_USER_HOME='C:\btg\gradle-home'
 
 > 仓库根 `.gitignore` 里「spec 入库以保证从 tag 可重建 exe」只承诺**桌面版 exe**，不涉及 APK。
 
+### 发布一次安卓 release（步骤）
+
+> 下面七条是 2026-10-28 发布 v2.2.1 时用真金白银换来的，漏一条就会有人再踩一次。
+
+**① 生成 keystore 之后立刻备份 —— 这是第 0 步，不是最后一步**
+
+包一旦发出去就没有退路：密钥丢了 = 这个应用**永远无法再更新**（未上架应用商店，
+没有第三方托管签名）。换 `applicationId` 等于换一个 App，老用户卸载重装、数据全丢。
+
+```bat
+mkdir C:\btg\keys
+"C:\btg\jdk\jdk-17.0.20.1+1\bin\keytool.exe" -genkeypair -v ^
+  -keystore "C:\btg\keys\tgproxy-release.jks" ^
+  -storetype PKCS12 -keyalg RSA -keysize 4096 -validity 10000 ^
+  -alias tgproxy-release ^
+  -dname "CN=TGProxy, OU=Personal, O=kkf, C=CN"
+```
+
+口令由 keytool **交互式询问**（不传 `-storepass`，口令就不会进命令行历史）。
+备份到**两个不同的地方**；备份完把明文口令文件删掉，口令进密码管理器。
+想让「备份存在」也可验证，就把密钥文件的 sha256 记下来 —— 任何一份副本算一下
+哈希对上就是同一把钥匙（证书指纹则换容器也不变，用来判断是不是同一把钥匙）。
+
+**② `storeFile` 必须是绝对路径**
+
+`build.gradle.kts` 里是 `file(storePath)`，相对路径会按 `app/` 解析，指向错误位置。
+
+**③ 两个口令都要填**
+
+只填 `storePassword` 会在**打包阶段**才失败：
+`SigningConfig "release" is missing required property "keyPassword"` ——
+编译全白做一遍，报错还不指向 `keystore.properties`。
+
+**④ 构建必须用 `-p <ASCII junction>`，`cd` 进去无效**
+
+见上面「必须从 ASCII 路径构建」一节：`cd` 进去 Gradle 会把 junction 规范化回
+真实路径，`@argfile` 里又是中文，十几套件一起 `initializationError`。
+
+**⑤ tag 用 `git tag -a` 先建好再推**
+
+不要让 Release API 在 tag 不存在时隐式创建 —— 那会得到一个**轻量 tag**，
+而且指向「建 Release 那一刻的 main」，不是产出 APK 的那个 commit，溯源就断了。
+
+```bash
+git tag -a android-v2.2.1 -m "tgproxy Android android-v2.2.1 正式签名版" <产出 APK 的 commit>
+git push <ssh-url> refs/tags/android-v2.2.1
+```
+
+**⑥ digest 必须现查 API，不能从历史消息或旧文档里搬**
+
+跨版本引用的数字（digest / 大小 / 行数 / 测试例数）在写进任何结论前都要**现查一次**：
+上下文里的旧值不是缓存，是陷阱 —— 它长得和正确答案一模一样。
+（真实案例：把 v2.2.0 的 `e01385de…` 写成了 v2.2.1 的，而 v2.2.1 实际是 `1803f409…`。）
+
+**⑦ 校验只能下载发布物重算**
+
+APK 不可字节复现（见上一节），拿本地重建产物去比对会得到「发布坏了」的**假警报**。
+正确做法：从 Releases 下载 → 重算 sha256 → 与 Release 正文里的值比对，
+再与 GitHub 返回的 asset `digest` 比对，**三方一致**才算过。
+
 ## 工程结构
 
 ```
