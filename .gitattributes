@@ -1,0 +1,4 @@
+# Release 正文归档要求与 GitHub 上的 body 逐字节可比，
+# 而 core.autocrlf=true 会让 checkout 时把 LF 翻成 CRLF —— 那样每行都不同，
+# 「逐字节一致」就只对 blob 成立、对工作区不成立。这里钉死 LF。
+docs/release-notes/*.md text eol=lf
