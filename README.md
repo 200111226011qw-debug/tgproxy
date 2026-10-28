@@ -11,7 +11,8 @@
 ```
 ├── tgproxy/                   # 桌面版：Python 标准库，零第三方依赖，python app.py 一条命令启动
 ├── tgproxy-android/           # 安卓版：Kotlin + Compose，Android Studio 打开即构建
-└── version-release-client/    # 版本发布管理客户端：单文件 HTML，双击即用
+├── version-release-client/    # 版本发布管理客户端：单文件 HTML，双击即用
+└── docs/release-notes/        # 各版本 Release 正文归档（与线上逐字节一致）
 ```
 
 ## 核心功能
@@ -49,10 +50,23 @@ raw.githubusercontent.com 直连失败时自动依次回退 cdn / gcore / fastly
   （HTML / JSON / 任意文本中的 ip:port 对，含 geonode 等 JSON API 的 ip/port 字段），
   误报由 TG 实测过滤
 - 各源解析结果按 host:port 全局去重合并；单源超过 1000 条随机抽样，合并超过 3000 条随机抽样
-- 可通过配置 / API 自定义数据源列表（桌面版 `config.json` 的 `proxy_list_urls`，安卓版在设置中追加自定义源）
+- 可通过配置 / API 自定义数据源列表（桌面版 `data/config.json` 的 `proxy_list_urls`，安卓版在设置中追加自定义源）
 
 ## 快速开始
 
 - 桌面版：见 [tgproxy/README.md](tgproxy/README.md)
 - 安卓版：见 [tgproxy-android/README.md](tgproxy-android/README.md)
 - 版本发布管理客户端：见 [version-release-client/README.md](version-release-client/README.md)
+
+## 版本与发布
+
+每个版本的 Release 正文都归档在 [`docs/release-notes/`](docs/release-notes/)，与 GitHub 上的 Release 正文**逐字节一致**（从 API 取回，不是另写一份）。
+
+| 版本 | 要点 | 归档 |
+|---|---|---|
+| v2.2.1 | 商店版 Telegram 唤起假阴性修复；状态文件收敛到 `data/`；限制内置窗口体积 | [v2.2.1.md](docs/release-notes/v2.2.1.md) |
+| v2.2.0 | 桌面独立窗口（浏览器 `--app` 模式，零新依赖）；关窗口即退出；唤起兜底 | [v2.2.0.md](docs/release-notes/v2.2.0.md) |
+| v2.1.0 | 双端数据契约对齐；性能收官（中位 127.63s → 44.76s） | [v2.1.0.md](docs/release-notes/v2.1.0.md) |
+
+二进制产物在 [GitHub Releases](https://github.com/200111226011qw-debug/tgproxy/releases) 下载。
+安卓版目前仍是 **Debug 签名包**（未建 release keystore），源码可直接构建。
