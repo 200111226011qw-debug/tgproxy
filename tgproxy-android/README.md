@@ -61,6 +61,12 @@ $env:GRADLE_USER_HOME='C:\btg\gradle-home'
 `C:\btg\tgproxy-live` 是指向本工程目录的 junction（`New-Item -ItemType Junction`），
 构建产物仍然写回工程目录本身。校验基线：**125 例全绿**（15 个套件）。
 
+> ⚠️ **junction 必须用 `-p` 传进去，`cd` 进去不行。**
+> `cd C:\btg\tgproxy-live && gradle ...` 会让 Gradle 把 junction 规范化回真实路径
+> （`projectDir` 打印出来仍是 `C:\Users\黄冬\...`），`@argfile` 里照样是中文，
+> 11~15 个套件一起 `initializationError`。只有 `gradle -p C:\btg\tgproxy-live`
+> 才会保留 ASCII 前缀。2026-10-28 两种写法都实测过：`-p` → 125 全绿，`cd` → 全挂。
+
 ### 正式签名构建（release keystore）
 
 签名材料**不入库**：密钥文件放仓库外，`keystore.properties` 已被 `.gitignore` 忽略，
