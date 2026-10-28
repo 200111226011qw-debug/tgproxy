@@ -300,11 +300,16 @@ def test_telegram_proxy_url_uses_socks_scheme_without_secret():
     assert "secret" not in url
 
 
-def test_open_telegram_degrades_when_protocol_missing():
-    """空壳协议下 os.startfile 会静默成功，所以必须自己校验并降级。
+def test_open_telegram_still_attempts_when_registry_unverifiable():
+    """注册表查不到 handler **不等于**协议不可用，仍然要尝试唤起。
 
-    这是实测踩到的：注册表里 HKCU\\Software\\Classes\\tg 存在但没有
-    shell\\open\\command，点按钮毫无反应，而后端返回了 ok=true。
+    2026-10-28 实测：商店版（AppX）Telegram 不写 `shell\\open\\command`，
+    `AssocQueryString` 也返回 0x80070483，但 `os.startfile("tg://")` 确实能把
+    Telegram 唤到前台。旧实现在这里直接返回 ok=false 并拒绝调用 —— 对商店版
+    用户是永远唤不醒的假阴性。
+
+    新契约：照样唤起；同时把 warning + url 一起返回，让界面把链接也给出来，
+    这样「空壳协议点了没反应」的情况下用户仍然有一条路。
     """
     server, thread, port = _serve_tgproxy()
     opened = []
@@ -324,10 +329,10 @@ def test_open_telegram_degrades_when_protocol_missing():
         _stop(server, thread)
 
     assert status == 200
-    assert body.get("ok") is False
+    assert body.get("ok") is True, "无法验证协议时也必须真的尝试唤起"
+    assert opened == ["tg://socks?server=1.2.3.4&port=1080"]
     assert body.get("url") == "tg://socks?server=1.2.3.4&port=1080"
-    assert body.get("hint")
-    assert opened == [], "协议不可用时不该调用 startfile"
+    assert body.get("warning"), "无法验证时必须带 warning，让界面把链接也给出来"
 
 
 def test_open_telegram_calls_startfile_when_protocol_ok():
@@ -350,6 +355,7 @@ def test_open_telegram_calls_startfile_when_protocol_ok():
 
     assert status == 200 and body.get("ok") is True
     assert opened == ["tg://socks?server=1.2.3.4&port=1080"]
+    assert not body.get("warning"), "注册表能验证时不加多余的提示"
 
 
 if __name__ == "__main__":

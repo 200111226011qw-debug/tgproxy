@@ -821,7 +821,14 @@
       body: JSON.stringify({ host: btn.getAttribute("data-host"), port: btn.getAttribute("data-port") })
     }).then(function (data) {
       if (data && data.ok) {
-        btn.textContent = "已唤起 Telegram";
+        // warning = 注册表查不到 handler（商店版 Telegram 就是这样），
+        // 但唤起请求已经发出去了。把链接一并给出来，免得用户对着没反应的屏幕发呆。
+        if (data.warning) {
+          showTgFallback(data.warning, data.url || "", "");
+          btn.textContent = "已发送唤起";
+        } else {
+          btn.textContent = "已唤起 Telegram";
+        }
         return;
       }
       // 不管失败原因是「tg:// 没注册」「代理已不在列表」还是服务端异常，

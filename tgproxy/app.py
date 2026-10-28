@@ -237,15 +237,18 @@ def open_external_url(url):
 
 
 def protocol_has_handler(scheme):
-    """检查 URL scheme 是否真的关联到了可执行程序。
+    """检查 URL scheme 在**注册表里**是否关联到了可执行程序。
 
-    为什么必须自己查：Windows 上如果注册表里存在
-    `HKCU\\Software\\Classes\\<scheme>` 但**没有 `shell\\open\\command`**
-    （典型来源：装过便携版/商店版后残留的残缺键），ShellExecute 会找到这个
-    空壳 handler、却没有任何命令可执行 —— 而 `os.startfile` **静默返回成功**，
-    不抛异常。表现就是「点了没反应，但程序以为成功了」。
+    ⚠ 这是**必要不充分**条件，只能用来决定「要不要额外提示」，**不能用来拦下唤起**：
+    商店版（AppX）Telegram 不写 `shell\\open\\command`，Windows 通过 AppX 清单在
+    运行时解析协议 —— 2026-10-28 实测：`HKCU`/`HKCR` 两处都没有 command，
+    `AssocQueryString` 也返回 `0x80070483`，但 `os.startfile("tg://")` 能把
+    Telegram 唤到前台（前台窗口 PID 从 19048 变成 Telegram 的 17760）。
 
-    这里返回 False 时调用方应当降级为「把链接交给用户手动复制」。
+    反过来，如果注册表里存在 `HKCU\\Software\\Classes\\<scheme>` 但**没有**
+    `shell\\open\\command`（装过便携版/商店版后残留的空壳键），ShellExecute 会
+    找到这个空壳、却没有任何命令可执行，而 `os.startfile` **静默返回成功**。
+    所以「没抛异常」也不代表成功 —— 两种情况都只能靠给用户一条可复制的链接兜底。
     """
     if sys.platform != "win32":
         return True
@@ -600,29 +603,30 @@ class ApiHandler(BaseHTTPRequestHandler):
             )
             return
         url = telegram_proxy_url(entry)
-        # 先确认协议真的关联了程序：空壳 handler 下 os.startfile 会静默成功，
-        # 不校验就会一直返回 ok 而 Telegram 毫无反应
-        if not protocol_has_handler("tg"):
-            self._send_json({
-                "ok": False,
-                "error": "系统未正确注册 tg:// 协议，无法自动唤起 Telegram",
-                "url": url,
-                "hint": "已把链接放到下面的输入框，复制后在 Telegram 收藏夹里粘贴并点击；"
-                        "或在 Telegram 设置里搜索 registertg 重新注册协议",
-            })
-            return
+        # 注册表查不到 handler **不代表协议不可用**（商店版走 AppX 注册）。
+        # 所以这个检查只决定「要不要额外提示」，绝不用来拦下唤起。
+        verified = protocol_has_handler("tg")
         try:
             open_external_url(url)
-        except OSError:
+        except OSError as exc:
             self._send_json({
                 "ok": False,
                 "error": "无法唤起 Telegram，请确认已安装 Telegram Desktop",
                 "url": url,
                 "hint": "复制链接后在 Telegram 收藏夹里粘贴并点击",
+                "detail": str(exc),
             }, status=500)
             return
+        if verified:
+            self._send_json({"ok": True, "url": url})
             return
-        self._send_json({"ok": True, "url": url})
+        # 无法从注册表验证：可能真没装，也可能是商店版。已尝试唤起，同时把链接给出去。
+        self._send_json({
+            "ok": True,
+            "url": url,
+            "warning": "注册表里没有找到 tg:// 处理程序（商店版 Telegram 属于这种情况），"
+                       "已尝试唤起；如果 Telegram 没有弹出来，请复制下面的链接手动添加",
+        })
 
     def _handle_settings_update(self):
         try:
