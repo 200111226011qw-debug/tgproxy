@@ -132,31 +132,44 @@ def test_progress_reports_both_test_stages_with_intermediate_counts():
         assert dones == sorted(dones), "%s 阶段 done 回退了：%r" % (stage, dones)
 
 
-def test_progress_tg_total_counts_only_socks5():
-    """MTProto 不参与 TG 实测，不该计入进度分母。"""
+def test_progress_tg_total_includes_mtproto():
+    """进度分母只计「真正会被测」的类型：socks5 + mtproto。
+
+    MTProto 自 Phase 4 起参与真校验，必须计入；http 等已排除类型不计入。
+    """
     manager = pm.ProxyManager()
     entries = [
         {"host": "1.1.1.1", "port": 1080, "type": "socks5"},
-        {"host": "2.2.2.2", "port": 1080, "type": "mtproto"},
+        {"host": "2.2.2.2", "port": 443, "type": "mtproto",
+         "link": "tg://proxy?server=2.2.2.2&port=443&secret="
+                 "4fc30d1222972a04067e805a5134cb57"},
         {"host": "3.3.3.3", "port": 1080, "type": "socks5"},
+        {"host": "4.4.4.4", "port": 8080, "type": "http"},
     ]
     seen = []
-    orig = pm.test_telegram_via_socks5
+    orig_tg = pm.test_telegram_via_socks5
+    orig_mt = pm.check_mtproto_proxy
 
     def slow(host, port, **kwargs):
         seen.append(dict(manager.get_state()["progress"]))
         time.sleep(0.01)
         return 40
 
+    def fake_mt(host, port, secret, **kwargs):
+        from mtproto_handshake import CheckResult
+        return CheckResult(True, host, int(port), "raw", rtt_ms=35.0)
+
     pm.test_telegram_via_socks5 = slow
+    pm.check_mtproto_proxy = fake_mt
     try:
         manager._test_telegram_entries(entries)
     finally:
-        pm.test_telegram_via_socks5 = orig
+        pm.test_telegram_via_socks5 = orig_tg
+        pm.check_mtproto_proxy = orig_mt
 
     tg_rows = [s for s in seen if s["stage"] == "tg"]
     assert tg_rows, seen
-    assert all(r["total"] == 2 for r in tg_rows), tg_rows
+    assert all(r["total"] == 3 for r in tg_rows), tg_rows
 
 
 if __name__ == "__main__":
