@@ -1,0 +1,8 @@
+# Phase 1（MTProto 真校验）引入的唯一可选依赖。
+#
+# 用途：obfuscated2 传输层握手需要 AES-256-CTR。
+# 缺失时 mtproto_handshake 会返回 CRYPTO_UNAVAILABLE，对应节点标记「未验证」，
+# 其余功能（抓取 / TCP 预筛 / SOCKS5 两关实测）不受影响。
+#
+# 退路：若已装 pycryptodome，也会自动使用，无需本文件。
+cryptography>=41
