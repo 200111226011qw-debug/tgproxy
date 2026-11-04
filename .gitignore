@@ -12,6 +12,11 @@ known_good.json
 known_bad.json
 source_health.json
 rounds.jsonl
+tgproxy.log
+
+# v2.2.1 起运行时状态统一放 tgproxy/data/（上面几条按文件名忽略，这里整目录兜底，
+# 免得以后新增状态文件又漏掉一个）
+tgproxy/data/
 
 # 发行产物（dist/ 仅本地备料，不进仓库）
 version-release-client/dist/
