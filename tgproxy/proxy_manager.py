@@ -20,6 +20,14 @@ import round_log
 
 logger = logging.getLogger("tgproxy.proxy_manager")
 
+# MTProto 真校验。模块缺失（或部署时漏拷）不让整个应用起不来：
+# 降级为「未验证」，与缺加密库时的语义一致。
+try:
+    from mtproto_handshake import check_mtproto_proxy
+except Exception:  # pragma: no cover - 仅部署缺失时命中
+    check_mtproto_proxy = None
+    logger.warning("mtproto_handshake 不可用，MTProto 节点将保持「未验证」")
+
 
 def _atomic_write_json(path, payload, **dump_kwargs):
     """先写同目录临时文件再 os.replace，避免中断留下截断的半个 JSON。
@@ -261,6 +269,23 @@ def _parse_mtproto(scheme, rest):
     if not host or not port or not secret:
         return None
     return {"link": "%s://%s" % (scheme, rest), "host": host, "port": port, "type": "mtproto"}
+
+
+def _secret_from_link(link):
+    """从 entry["link"] 反解 secret。
+
+    刻意**不**给 entry 增加 secret 字段：link 本来就是 /api/proxies 的既有字段
+    （UI 用它做 tg:// 深链），从它反解不改变任何对外契约，也不影响安卓端。
+    解析失败返回 None —— 调用方据此保持「未验证」，不误判为失败。
+    """
+    if not link:
+        return None
+    try:
+        params = parse_qs(urlparse(link).query)
+    except ValueError:
+        return None
+    secret = (params.get("secret") or [""])[0].strip()
+    return secret or None
 
 
 def _crawl_from_json(node, entries, seen):
@@ -677,6 +702,23 @@ def tg_dc_timeout_for(max_tg_latency_ms):
     return max(TG_DC_TIMEOUT_BASE_SEC, derived)
 
 
+def mtproto_budget_for(max_tg_latency_ms):
+    """MTProto 单节点预算：连接 + obfuscated2 握手 + resPQ 读取的总时长上限。
+
+    与 `tg_dc_timeout_for` 同源：`check_mtproto_proxy` 返回的 rtt_ms 就是从连接前
+    到 resPQ 解析完成的往返，门槛比较的就是它，所以预算必须 ≥ 门槛 + 余量，
+    否则「能过门槛」的节点会在读响应时被提前砍掉。
+    """
+    try:
+        limit = float(max_tg_latency_ms)
+    except (TypeError, ValueError):
+        limit = float(TG_LATENCY_LIMIT_MS)
+    if limit <= 0:
+        limit = float(TG_LATENCY_LIMIT_MS)
+    derived = limit / 1000.0 + TG_DC_TIMEOUT_MARGIN_SEC
+    return max(TG_DC_TIMEOUT_BASE_SEC, derived)
+
+
 def tg_deadline_for(dc_timeout, web_timeout):
     """单节点总预算：必须 ≥ 两关之和，否则高门槛用户还没测完就被 deadline 砍掉。
 
@@ -820,6 +862,34 @@ def sort_proxies(proxies):
     return sorted(proxies, key=sort_key)
 
 
+def _check_mtproto_entry(entry, budget):
+    """单节点 MTProto 真校验，返回 (tg_ok, latency_ms, code)。
+
+    tg_ok 三态：
+      True  —— 握手成功且 resPQ 回显了 nonce（真出口）
+      False —— 真失败（超时 / 协议错 / 假节点）
+      None  —— **无法判定**（缺加密库、link 里没有 secret）。不计失败，
+               否则没装 cryptography 的用户会把所有 MTProto 节点连败拉黑，
+               把环境问题算成节点问题。
+    """
+    if check_mtproto_proxy is None:
+        return None, None, "CRYPTO_UNAVAILABLE"
+
+    secret = _secret_from_link(entry.get("link"))
+    if not secret:
+        return None, None, "INVALID_SECRET"
+
+    result = check_mtproto_proxy(
+        entry["host"], entry["port"], secret,
+        connect_timeout=budget, response_timeout=budget,
+    )
+    if result.ok:
+        return True, result.rtt_ms, "OK"
+    if result.error_code == "CRYPTO_UNAVAILABLE":
+        return None, None, result.error_code
+    return False, None, (result.error_code or "UNKNOWN")
+
+
 class ProxyManager:
     """代理状态管理：多源抓取 -> 合并去重 -> 抽样 -> 并发测试 -> 供 API 读取。"""
 
@@ -854,6 +924,9 @@ class ProxyManager:
         self._stage_durations = {}
         # 上一轮 TG 两关各自的耗时分布（dc_fail / web_fail / ok 的计数与分位）
         self._tg_gate_stats = {}
+        # 上一轮 MTProto 真校验的独立计数（tested / ok / fail / unavailable）。
+        # 与两关漏斗严格分开：dc_fail/web_fail 是 SOCKS5 专属语义，混进来就废了。
+        self._mtproto_gate_stats = {}
         # 实时进度：独立锁，避免与 _lock 抢（_lock 在体检全程持有）
         self._progress_lock = threading.Lock()
         self._live_progress = {"stage": "idle", "done": 0, "total": 0}
@@ -914,6 +987,7 @@ class ProxyManager:
                 "stats": dict(self._stats),
                 "stage_durations": dict(self._stage_durations),
                 "tg_gate_stats": dict(self._tg_gate_stats),
+                "mtproto_gate_stats": dict(self._mtproto_gate_stats),
                 "progress": dict(self._live_progress),
                 "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
@@ -1487,12 +1561,19 @@ class ProxyManager:
         return None
 
     def _test_telegram_entries(self, entries):
-        """并发 TG 实测：每节点一条线程内先 DC 后站点串行两关（避免对同一免费代理
-        同时开两条连接触发限流的假失败）；延迟取「经代理到 Telegram 数据中心的往返」
-        （与 Telegram 客户端实际线路一致）。仅 SOCKS5 参与；MTProto 标记为未验证。"""
+        """并发 TG 实测。
+
+        - SOCKS5：两关串行（先 CONNECT DC，再 TLS+HTTP 站点），延迟取第一关往返。
+        - MTProto：obfuscated2 真握手 + resPQ 回显校验（见 mtproto_handshake）。
+
+        两类共用同一个有界线程池，但**统计严格隔离**：两关漏斗只收 SOCKS5，
+        MTProto 单独落 _mtproto_gate_stats。dc_fail/web_fail 是 SOCKS5 专属语义，
+        混入 MTProto 会让报表失真。
+        """
         if not entries:
             with self._lock:
                 self._tg_gate_stats = {}
+                self._mtproto_gate_stats = {}
             return []
         samples = []
         samples_lock = threading.Lock()
@@ -1501,53 +1582,90 @@ class ProxyManager:
             with samples_lock:
                 samples.append(record)
 
+        socks5_indices = [i for i, e in enumerate(entries) if e["type"] == "socks5"]
+        mtproto_indices = [i for i, e in enumerate(entries) if e["type"] == "mtproto"]
+        # 进度分母 = 两类实际参与实测的节点数。MTProto 从前不计入，接线后必须计入，
+        # 否则进度会提前跑到 100%，而 MTProto 还在测。
+        tg_total = len(socks5_indices) + len(mtproto_indices)
         # 进度必须在 submit 之前设置：submit 会立刻起 worker，晚一步设的话
         # 第一个任务读到的还是上一个阶段的进度
-        socks5_total = sum(1 for e in entries if e["type"] == "socks5")
-        self._set_progress("tg", 0, socks5_total)
+        self._set_progress("tg", 0, tg_total)
+
+        budget = mtproto_budget_for(self._max_tg_latency_ms)
         results = [None] * len(entries)
+        kind_by_index = {}
+        mt_tested = mt_ok = mt_fail = mt_unavailable = 0
+
         with ThreadPoolExecutor(max_workers=TG_TEST_MAX_WORKERS) as executor:
-            futures = {
-                index: executor.submit(
+            futures = {}
+            for index in socks5_indices:
+                entry = entries[index]
+                futures[executor.submit(
                     test_telegram_via_socks5, entry["host"], entry["port"],
                     sink=collect, max_latency_ms=self._max_tg_latency_ms,
-                )
-                for index, entry in enumerate(entries)
-                if entry["type"] == "socks5"
-            }
-            futures_rev = {f: i for i, f in futures.items()}
-            tg_total = len(futures)
+                )] = index
+                kind_by_index[index] = "socks5"
+            for index in mtproto_indices:
+                futures[executor.submit(
+                    _check_mtproto_entry, entries[index], budget,
+                )] = index
+                kind_by_index[index] = "mtproto"
+
             tg_done = 0
-            # futures 是 {index: future}，as_completed 要的是 future 序列
-            for future in as_completed(futures.values()):
-                index = futures_rev[future]
+            for future in as_completed(futures):
+                index = futures[future]
                 entry = dict(entries[index])
                 # 逐 future 兜底：单个节点抛异常时若直接冒泡，会跳出 for，
                 # 接着 with 退出触发 shutdown(wait=True)，把剩余 200+ 个任务
                 # 全部 join 住 —— 一颗老鼠屎拖死整轮。这里降级为「该节点失败」。
                 try:
-                    latency = future.result()
+                    if kind_by_index[index] == "socks5":
+                        latency = future.result()
+                        entry["tg_ok"] = latency is not None
+                        entry["tg_latency_ms"] = latency
+                    else:
+                        tg_ok, latency, code = future.result()
+                        entry["tg_ok"] = tg_ok
+                        entry["tg_latency_ms"] = latency
+                        mt_tested += 1
+                        if tg_ok is True:
+                            mt_ok += 1
+                        elif tg_ok is False:
+                            mt_fail += 1
+                        else:
+                            mt_unavailable += 1
+                            logger.debug(
+                                "MTProto 无法判定（%s）：%s:%s",
+                                code, entry["host"], entry["port"],
+                            )
                 except Exception:
                     logger.exception(
                         "TG 实测单节点异常，按失败计：%s:%s",
                         entries[index]["host"], entries[index]["port"],
                     )
-                    latency = None
-                entry["tg_ok"] = latency is not None
-                entry["tg_latency_ms"] = latency
+                    entry["tg_ok"] = False
+                    entry["tg_latency_ms"] = None
                 results[index] = entry
                 tg_done += 1
                 if tg_done % PROGRESS_STEP == 0 or tg_done == tg_total:
                     self._set_progress("tg", tg_done, tg_total)
-            # 未参与 SOCKS5 实测的（MTProto）标记为未验证
+
+            # 既不是 socks5 也不是 mtproto 的（未知类型）：保持未验证
             for index, entry in enumerate(entries):
-                if index not in futures:
+                if index not in kind_by_index:
                     item = dict(entry)
                     item["tg_ok"] = None
                     item["tg_latency_ms"] = None
                     results[index] = item
+
         with self._lock:
             self._tg_gate_stats = summarize_tg_gates(samples)
+            self._mtproto_gate_stats = {
+                "tested": mt_tested,
+                "ok": mt_ok,
+                "fail": mt_fail,
+                "unavailable": mt_unavailable,
+            }
         return [item for item in results if item is not None]
 
     def _test_entries(self, entries):
