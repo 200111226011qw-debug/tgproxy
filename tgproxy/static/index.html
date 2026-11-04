@@ -533,26 +533,58 @@
      默认源里没有任何 t.me/proxy 链接（实测 5 源 5753 行命中 0），所以 MTProto
      真校验在默认配置下不执行。这里刻意显示「未配置」而不是那个恒为 0 的计数：
      0 个通过和「一个都没测」长得一样，摆一个 0 出来只会误导。 */
+  /* MTProto 源状态的文案选择 —— 纯函数，不碰 DOM。
+     四种形态必须分得开：in_pool>0 而 candidates=0 表示「全部死在 TCP 预筛」，
+     如果只显示「N 个候选」，用户看到的是一个合理但错误的理由。
+
+     标注给 tests/test_mtproto_label.py 提取：那个测试用 node 跑真断言，
+     所以这段代码不允许依赖 $() 或任何浏览器 API。 */
+  // >>> mtprotoLabel
+  function mtprotoLabel(configured, inPool, candidates) {
+    var pool = inPool || 0;
+    var cand = candidates || 0;
+    if (!configured) {
+      return {
+        text: "未配置",
+        title: "默认源不产出 t.me/proxy 链接，MTProto 真校验未启用。"
+          + "要启用：在 data/config.json 的 mtproto_list_urls 里填一个含 t.me/proxy 的列表地址。"
+      };
+    }
+    if (pool > 0 && cand === 0) {
+      return {
+        text: pool + " 个 · 全被预筛淘汰",
+        title: "本轮池中有 " + pool + " 个 MTProto 节点，但一个都没通过 TCP 预筛："
+          + "节点全死，或到 Telegram 的网络不通。"
+      };
+    }
+    if (cand > 0 && cand < pool) {
+      return {
+        text: pool + " 个 · 进闸门 " + cand + " 个",
+        title: "池中 " + pool + " 个 MTProto 节点，通过 TCP 预筛进入握手的 " + cand + " 个。"
+      };
+    }
+    if (pool > 0) {
+      return {
+        text: pool + " 个候选",
+        title: "本轮池中有 " + pool + " 个 MTProto 节点，全部进入闸门。"
+      };
+    }
+    return {
+      text: "已配置 · 无候选",
+      title: "已配置 MTProto 源，但本轮没有解析到 t.me/proxy 链接："
+        + "可能是源里本身没有，也可能源被停用了。"
+    };
+  }
+  // <<< mtprotoLabel
+
   function renderMtprotoSource(data) {
     var el = $("side-mtproto");
     if (!el) return;
     var stats = data.mtproto_gate_stats || {};
-    var inPool = stats.in_pool || 0;
-    var candidates = stats.candidates || 0;
-    if (!data.mtproto_configured) {
-      el.textContent = "未配置";
-      el.title = "默认源不产出 t.me/proxy 链接，MTProto 真校验未启用。"
-        + "要启用：在 data/config.json 的 mtproto_list_urls 里填一个含 t.me/proxy 的列表地址。";
-      return;
-    }
-    if (inPool > 0) {
-      el.textContent = inPool + " 个候选";
-      el.title = "本轮池中有 " + inPool + " 个 MTProto 节点，进入闸门 " + candidates + " 个";
-      return;
-    }
-    el.textContent = "已配置 · 无候选";
-    el.title = "已配置 MTProto 源，但本轮没有解析到 t.me/proxy 链接："
-      + "可能是源里本身没有，也可能全部被 TCP 预筛淘汰。";
+    var view = mtprotoLabel(!!data.mtproto_configured,
+                            stats.in_pool || 0, stats.candidates || 0);
+    el.textContent = view.text;
+    el.title = view.title;
   }
 
   function renderSummary(data) {
