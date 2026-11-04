@@ -20,6 +20,7 @@ import hashlib
 import os
 import socket
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -83,14 +84,14 @@ class AesCtrStream:
 
 _AES_BACKEND: Optional[Callable[[bytes, bytes], tuple]] = None
 _AES_RESOLVED = False
+# 首次解析要 import cryptography 并加载 OpenSSL DLL（几十到几百毫秒）。
+# 这里的锁不是性能优化，是正确性要求：300 并发下若先置 _AES_RESOLVED 再填
+# _AES_BACKEND，等待窗口内到达的线程会读到 None，从而误判 CRYPTO_UNAVAILABLE。
+_AES_LOCK = threading.Lock()
 
 
-def _aes_backend() -> Optional[Callable[[bytes, bytes], tuple]]:
-    global _AES_BACKEND, _AES_RESOLVED
-    if _AES_RESOLVED:
-        return _AES_BACKEND
-    _AES_RESOLVED = True
-
+def _load_aes_factory() -> Optional[Callable[[bytes, bytes], tuple]]:
+    """探测可用的 AES 后端，无可用时返回 None。不做缓存（由 _aes_backend 加锁缓存）。"""
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -98,8 +99,7 @@ def _aes_backend() -> Optional[Callable[[bytes, bytes], tuple]]:
             stream = Cipher(algorithms.AES(key), modes.CTR(iv)).encryptor()
             return stream, "update", "cryptography"
 
-        _AES_BACKEND = _new
-        return _AES_BACKEND
+        return _new
     except Exception:
         pass
 
@@ -112,13 +112,25 @@ def _aes_backend() -> Optional[Callable[[bytes, bytes], tuple]]:
             stream = AES.new(key, AES.MODE_CTR, counter=counter)
             return stream, "encrypt", "pycryptodome"
 
-        _AES_BACKEND = _new
-        return _AES_BACKEND
+        return _new
     except Exception:
         pass
 
-    _AES_BACKEND = None
     return None
+
+
+def _aes_backend() -> Optional[Callable[[bytes, bytes], tuple]]:
+    global _AES_BACKEND, _AES_RESOLVED
+    if _AES_RESOLVED:
+        return _AES_BACKEND
+    with _AES_LOCK:
+        if _AES_RESOLVED:  # 双检：等锁期间可能已被别的线程解析完
+            return _AES_BACKEND
+        _AES_BACKEND = _load_aes_factory()
+        # 必须最后置位：任何看到 _AES_RESOLVED=True 的线程，都能拿到终值
+        # （含「确实没有可用后端」的 None），不会读到半成品状态。
+        _AES_RESOLVED = True
+        return _AES_BACKEND
 
 
 def aes_ctr(key: bytes, iv: bytes) -> AesCtrStream:
