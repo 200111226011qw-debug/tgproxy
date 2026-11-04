@@ -322,6 +322,7 @@
       <div class="kv"><span class="k">本轮测数</span><span class="num" id="side-tested">—</span></div>
       <div class="kv"><span class="k">更新时间</span><span class="num" id="side-updated">—</span></div>
       <div class="kv"><span class="k">列表新鲜度</span><span class="num" id="side-fetch-age">—</span></div>
+      <div class="kv"><span class="k">MTProto 源</span><span class="num" id="side-mtproto">—</span></div>
     </div>
 
     <div class="spacer"></div>
@@ -528,6 +529,32 @@
       : "列表数据的新鲜度（取最旧源）";
   }
 
+  /* MTProto 源的状态。
+     默认源里没有任何 t.me/proxy 链接（实测 5 源 5753 行命中 0），所以 MTProto
+     真校验在默认配置下不执行。这里刻意显示「未配置」而不是那个恒为 0 的计数：
+     0 个通过和「一个都没测」长得一样，摆一个 0 出来只会误导。 */
+  function renderMtprotoSource(data) {
+    var el = $("side-mtproto");
+    if (!el) return;
+    var stats = data.mtproto_gate_stats || {};
+    var inPool = stats.in_pool || 0;
+    var candidates = stats.candidates || 0;
+    if (!data.mtproto_configured) {
+      el.textContent = "未配置";
+      el.title = "默认源不产出 t.me/proxy 链接，MTProto 真校验未启用。"
+        + "要启用：在 data/config.json 的 mtproto_list_urls 里填一个含 t.me/proxy 的列表地址。";
+      return;
+    }
+    if (inPool > 0) {
+      el.textContent = inPool + " 个候选";
+      el.title = "本轮池中有 " + inPool + " 个 MTProto 节点，进入闸门 " + candidates + " 个";
+      return;
+    }
+    el.textContent = "已配置 · 无候选";
+    el.title = "已配置 MTProto 源，但本轮没有解析到 t.me/proxy 链接："
+      + "可能是源里本身没有，也可能全部被 TCP 预筛淘汰。";
+  }
+
   function renderSummary(data) {
     var stats = data.stats || {};
     var tested = (stats.available || 0) + (stats.unverified || 0) +
@@ -543,6 +570,7 @@
     $("side-tested").textContent = updated ? tested : "—";
     $("side-updated").textContent = updated || "—";
     renderFetchAge(data, updated);
+    renderMtprotoSource(data);
 
     $("hero-available").textContent = updated ? (stats.available || 0) : "—";
     $("hero-tested").textContent = updated ? tested : "—";

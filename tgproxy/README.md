@@ -54,6 +54,32 @@ python -m pytest tests -q          # 期望 190 passed
 python tests/test_aes_backend_race.py    # 期望 3 行 PASS
 ```
 
+## 启用 MTProto 真校验（可选）
+
+默认的 5 个数据源全是 SOCKS5 列表——实测 5753 行里 `t.me/proxy` 命中 **0**——所以 MTProto
+真校验在默认配置下**不会执行**。侧栏「MTProto 源」会显示「未配置」，而不是显示一个
+恒为 0 的测试计数（0 个通过和「一个都没测」长得一样，摆出来只会误导）。
+
+要接上这条链路，在 `data/config.json` 里加自己的源：
+
+```json
+{
+  "mtproto_list_urls": ["https://example.com/mtproto.txt"]
+}
+```
+
+该文本里需含 `https://t.me/proxy?server=…&port=…&secret=…`（或 `tg://proxy?…`）行。
+重启后生效。判断是否接通看两处：
+
+- 侧栏「MTProto 源」→ `N 个候选`（而不再是「未配置」）
+- `/api/proxies` 的 `mtproto_gate_stats` → `in_pool > 0`
+
+三个计数的含义：`in_pool`（TCP 预筛前池里的 MTProto 数）、`candidates`（真正进入闸门的数，
+差额 = 死在预筛）、`tested`（完成握手的数）。
+
+> 为什么不内置一个 MTProto 源：那等于替所有用户选了一个第三方列表并默认抓取。
+> 源的质量、稳定性和内容该由使用者自己判断——工具只负责把开关做出来。
+
 ## 文件说明
 
 | 文件 | 职责 |
