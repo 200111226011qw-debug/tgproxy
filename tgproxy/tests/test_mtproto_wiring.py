@@ -99,6 +99,7 @@ def test_mtproto_ok_marks_verified():
     assert results[0]["tg_ok"] is True
     assert results[0]["tg_latency_ms"] == 42.5
     assert manager.get_state()["mtproto_gate_stats"] == {
+        "in_pool": 1, "candidates": 1,
         "tested": 1, "ok": 1, "fail": 0, "unavailable": 0,
     }
 
@@ -203,6 +204,7 @@ def test_mtproto_stats_bucket_counts_three_states():
         manager._test_telegram_entries(entries)
 
     assert manager.get_state()["mtproto_gate_stats"] == {
+        "in_pool": 3, "candidates": 3,
         "tested": 3, "ok": 1, "fail": 1, "unavailable": 1,
     }
 
@@ -214,7 +216,11 @@ def test_empty_entries_clears_both_stats():
     manager._test_telegram_entries([])
     state = manager.get_state()
     assert state["tg_gate_stats"] == {}
-    assert state["mtproto_gate_stats"] == {}
+    # 空池也给完整形状：candidates=0 表示「没有节点进入闸门」，不是「全部通过」
+    assert state["mtproto_gate_stats"] == {
+        "in_pool": 0, "candidates": 0,
+        "tested": 0, "ok": 0, "fail": 0, "unavailable": 0,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -259,9 +265,55 @@ def test_end_to_end_real_handshake_through_pipeline():
     assert results[0]["tg_ok"] is True, results[0]
     assert results[0]["tg_latency_ms"] is not None
     assert manager.get_state()["mtproto_gate_stats"] == {
+        "in_pool": 1, "candidates": 1,
         "tested": 1, "ok": 1, "fail": 0, "unavailable": 0,
     }
     assert server.errors == [], server.errors
+
+
+def test_in_pool_defaults_to_candidates_when_unknown():
+    """直接调用（没传 in_pool）时，视为「池里的都进了闸门」，不能凭空少算。"""
+    manager = pm.ProxyManager()
+    with _Patched(mt=_ok):
+        manager._test_telegram_entries([_entry("2.2.2.2", link=TG_LINK)])
+
+    stats = manager.get_state()["mtproto_gate_stats"]
+    assert stats["in_pool"] == 1
+    assert stats["candidates"] == 1
+
+
+def test_in_pool_greater_than_candidates_when_tcp_prefilter_drops_them():
+    """池里 5 个 MTProto，只有 1 个通过 TCP：差额说明其余死在预筛，不是「没测」。"""
+    manager = pm.ProxyManager()
+    with _Patched(mt=_ok):
+        manager._test_telegram_entries([_entry("2.2.2.2", link=TG_LINK)], in_pool=5)
+
+    stats = manager.get_state()["mtproto_gate_stats"]
+    assert stats["in_pool"] == 5
+    assert stats["candidates"] == 1
+    assert stats["tested"] == 1
+
+
+def test_zero_in_pool_means_not_covered():
+    """源里没有 tg:// 链接：in_pool=0。此时 tested=0 是「未覆盖」而不是「全部通过」。"""
+    manager = pm.ProxyManager()
+    manager._test_telegram_entries([], in_pool=0)
+
+    stats = manager.get_state()["mtproto_gate_stats"]
+    assert stats["in_pool"] == 0
+    assert stats["candidates"] == 0
+    assert stats["tested"] == 0
+
+
+def test_pool_nonzero_but_gate_empty_means_all_dropped_by_tcp():
+    """池里有 4 个 MTProto，一个都没进闸门：差额只能是 TCP 预筛淘汰，不是「没测」。"""
+    manager = pm.ProxyManager()
+    manager._test_telegram_entries([], in_pool=4)
+
+    stats = manager.get_state()["mtproto_gate_stats"]
+    assert stats["in_pool"] == 4
+    assert stats["candidates"] == 0
+    assert stats["tested"] == 0
 
 
 if __name__ == "__main__":

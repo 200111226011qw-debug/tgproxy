@@ -173,13 +173,19 @@ def _record(**kwargs):
 
 def test_record_has_mtproto_section_with_defaults():
     rec = _record()
-    assert rec["mtproto"] == {"tested": 0, "ok": 0, "fail": 0, "unavailable": 0}
+    assert rec["mtproto"] == {
+        "in_pool": 0, "candidates": 0,
+        "tested": 0, "ok": 0, "fail": 0, "unavailable": 0,
+    }
 
 
 def test_record_carries_mtproto_counts():
-    rec = _record(mtproto_stats={"tested": 18, "ok": 15, "fail": 2, "unavailable": 1})
+    rec = _record(mtproto_stats={"in_pool": 20, "candidates": 18,
+                                 "tested": 18, "ok": 15, "fail": 2, "unavailable": 1})
     assert rec["mtproto"]["tested"] == 18
     assert rec["mtproto"]["unavailable"] == 1
+    assert rec["mtproto"]["in_pool"] == 20
+    assert rec["mtproto"]["candidates"] == 18
 
 
 def test_record_backward_compatible_without_mtproto():
