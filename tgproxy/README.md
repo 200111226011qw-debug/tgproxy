@@ -79,6 +79,19 @@ python tools/mutation_check.py          # 逐项注入错实现，确认测试�
 清单里有一条 `[自检] 改一句注释`，期望 `NOT_CAUGHT`：如果它被报成 `CAUGHT`，
 说明判定逻辑在瞎报。
 
+> **行尾约定（这条坑栽过三次）**
+>
+> `core.autocrlf=true` 的机器检出的是 CRLF，而多行锚点通常用 `\n` 写 ——
+> 直接 `count()` 会得到 0，被报成 `INJECT_FAILED`，看着像「代码变了」，
+> 实际只是行尾不同。
+>
+> **任何做文本匹配/替换的代码（工具、脚本、测试 harness），匹配前都要兼容两种行尾，
+> 写回时还原成原来那种。** 参考实现见 `tools/mutation_check.py` 的 `_locate()`：
+> 它同时尝试 LF 与 CRLF 两种形式的锚点，选实际匹配的那一种，并把替换文本的行尾同步过去。
+>
+> 不用 `.gitattributes` 强制 `eol=lf`：那会让所有文件下次检出的行尾都变化，
+> diff 会很大，而收益只是让「碰巧是 LF 的文件保持 LF」。
+
 ## 启用 MTProto 真校验（可选）
 
 默认的 5 个数据源全是 SOCKS5 列表——实测 5753 行里 `t.me/proxy` 命中 **0**——所以 MTProto
