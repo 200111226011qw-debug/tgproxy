@@ -72,6 +72,25 @@ object Constants {
     const val TG_LATENCY_LIMIT_MS = 1_000
 
     // ============================================================================
+    // MTProto 真校验（obfuscated2 + req_pq_multi，与桌面版 mtproto_budget_for 同源）
+    // ============================================================================
+
+    /** MTProto 单节点预算下限（桌面版 TG_DC_TIMEOUT_BASE_SEC=2.0） */
+    const val MTPROTO_BUDGET_BASE_MS = 2_000
+
+    /** 预算相对延迟门槛的余量（桌面版 TG_DC_TIMEOUT_MARGIN_SEC=1.0） */
+    const val MTPROTO_BUDGET_MARGIN_MS = 1_000
+
+    /**
+     * MTProto 单节点预算：连接 + obfuscated2 握手 + resPQ 读取的总上限。
+     *
+     * 必须 ≥ 门槛 + 余量，否则「本来能过门槛」的节点会在读响应时被预算砍掉，
+     * 表现为「失败」而不是「太慢」—— 两种结论对用户的含义完全不同。
+     */
+    fun mtprotoBudgetMs(maxTgLatencyMs: Int = TG_LATENCY_LIMIT_MS): Int =
+        maxOf(MTPROTO_BUDGET_BASE_MS, maxTgLatencyMs + MTPROTO_BUDGET_MARGIN_MS)
+
+    // ============================================================================
     // 连续失败拉黑（v2.1.0，与桌面版 v1.9.0 对齐）
     // ============================================================================
 

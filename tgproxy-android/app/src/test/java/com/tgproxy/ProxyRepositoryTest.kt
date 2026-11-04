@@ -2,6 +2,9 @@ package com.tgproxy
 
 import com.tgproxy.data.KnownGoodStore
 import com.tgproxy.data.LatencyTester
+import com.tgproxy.data.MtProtoCaller
+import com.tgproxy.data.MtProtoCode
+import com.tgproxy.data.MtProtoResult
 import com.tgproxy.data.ProxyRepository
 import com.tgproxy.data.ProxyRepository.RefreshResult
 import com.tgproxy.data.ProxySource
@@ -58,6 +61,15 @@ class ProxyRepositoryTest {
             if (host.endsWith(".4")) 120 else null
     }
 
+    /** 可控假探针：记录调用次数，返回固定结论。 */
+    private class FakeProbe(private val result: MtProtoResult) : MtProtoCaller {
+        var calls = 0
+        override fun probe(host: String, port: Int, secret: String?, timeoutMs: Int): MtProtoResult {
+            calls++
+            return result
+        }
+    }
+
     @Test
     fun `成功刷新五项统计正确且四项之和等于 tested`() {
         val td = StandardTestDispatcher()
@@ -67,7 +79,8 @@ class ProxyRepositoryTest {
                 nextText = "socks5://1.2.3.4:1080\n" +
                     "socks5://1.2.3.5:1080\n" +
                     "socks5://1.2.3.6:1080\n" +
-                    "tg://proxy?server=1.2.3.7&port=443&secret=abc\n" +
+                    // ee(FakeTLS) 本端未实现：实测通道会跑，但结论必须是「无法判定」
+                    "tg://proxy?server=1.2.3.7&port=443&secret=ee" + "11".repeat(16) + "\n" +
                     "http://9.9.9.9:8080\n" +
                     "badline"
             }
@@ -78,7 +91,12 @@ class ProxyRepositoryTest {
                     else -> null
                 }
             }
-            val repository = ProxyRepository(source, AllPassTester(), gate, ioDispatcher = td)
+            val probe = FakeProbe(MtProtoResult(MtProtoCode.SECRET_UNSUPPORTED))
+            val repository = ProxyRepository(
+                source, AllPassTester(), gate,
+                ioDispatcher = td,
+                mtProtoProbe = probe,
+            )
 
             val result = repository.refresh("https://example.com/proxy.txt")
 
@@ -86,7 +104,8 @@ class ProxyRepositoryTest {
             result as RefreshResult.Success
             val stats = result.stats
             assertEquals(1, stats.available)
-            assertEquals(1, stats.unverified)   // MTProto
+            assertEquals(1, stats.unverified)   // MTProto（ee 无法判定）
+            assertEquals(1, probe.calls)        // 不再「未测就标未验证」：确实跑了探针
             assertEquals(1, stats.tgFailed)     // .5 两关失败
             assertEquals(1, stats.overThreshold) // .6 过两关但超 1000ms 门槛
             assertEquals(0, stats.dropped)      // TCP 全通过

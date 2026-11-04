@@ -1,6 +1,6 @@
 # tgproxy 安卓版（tgproxy_android）
 
-桌面版 tgproxy（Python）的安卓原生移植（v2.0.0 起与桌面版测试口径对齐；v2.1.0 列表优先布局重做 + 深色仪表盘视觉 + 连败拉黑加速）：自动抓取代理列表 → 解析筛选（仅保留 Telegram 可用的 SOCKS5 / MTProto）→ 连败拉黑跳过（连续 3 轮不通的节点 48 小时内不再测试，省时）→ TCP 预筛（128 并发）→ **TG 实测双闸**（经代理 CONNECT Telegram 数据中心 + 全链路访问 desktop.telegram.org，TLS+HTTP）→ **1000ms 延迟门槛** → 节点卡片列表（首屏即列表，v2rayNG 式「顶栏 + 卡片 + FAB」），每张卡片带渐变「使用」主按钮一键唤起 Telegram 添加代理，另支持复制 / 分享 / 长按菜单、下拉刷新、右下角 FAB 刷新、自动更新间隔与倒计时、分阶段进度与上轮耗时摘要、known_good 沉淀（启动即展示上轮可用节点，可开关）、0 节点时的全链路透明解释卡。
+桌面版 tgproxy（Python）的安卓原生移植（v2.0.0 起与桌面版测试口径对齐；v2.1.0 列表优先布局重做 + 深色仪表盘视觉 + 连败拉黑加速）：自动抓取代理列表 → 解析筛选（仅保留 Telegram 可用的 SOCKS5 / MTProto）→ 连败拉黑跳过（连续 3 轮不通的节点 48 小时内不再测试，省时）→ TCP 预筛（128 并发）→ **TG 实测双通道**（SOCKS5：经代理 CONNECT 数据中心 + 全链路访问 desktop.telegram.org；MTProto：obfuscated2 握手 + `req_pq_multi`，校验 resPQ 是否回显随机 nonce）→ **1000ms 延迟门槛** → 节点卡片列表（首屏即列表，v2rayNG 式「顶栏 + 卡片 + FAB」），每张卡片带渐变「使用」主按钮一键唤起 Telegram 添加代理，另支持复制 / 分享 / 长按菜单、下拉刷新、右下角 FAB 刷新、自动更新间隔与倒计时、分阶段进度与上轮耗时摘要、known_good 沉淀（启动即展示上轮可用节点，可开关）、0 节点时的全链路透明解释卡。
 
 - 包名 / applicationId：`com.tgproxy`
 - 架构：单 Activity + Jetpack Compose + Material3 + MVVM（StateFlow 响应式直推，**无本地 HTTP 服务器、无轮询**）
@@ -201,7 +201,11 @@ tgproxy-android/
 ## 功能说明
 
 - **启动即刷新 + known_good 先行展示**：冷启动立即执行一轮「抓取 → 解析 → TCP 预筛 → TG 实测 → 门槛过滤 → 统计 → 排序」；known_good 开关开启且有沉淀时，列表先行展示上轮验证通过的节点（半透明 + 「未测」胶囊标注，待本轮复测），无需等待刷新。
-- **TG 实测双闸（v2.0.0，与桌面版逐字节对齐）**：第一关经 SOCKS5 代理 CONNECT Telegram 数据中心 149.154.167.51:443（无认证握手 05 01 00 → CONNECT，IPv4 ATYP=1 / 域名 ATYP=3，往返毫秒即节点延迟）；第二关经代理 CONNECT desktop.telegram.org + TLS 证书校验 + HTTP 状态行（GET，验证全链路可用无劫持）；两关串行共享单节点 20s 总预算（单关 8s）；仅 SOCKS5 参与，MTProto 记「未验证」；并发 96。
+- **TG 实测双通道（SOCKS5 两关 + MTProto 真握手，与桌面版逐字节对齐）**：
+  - **SOCKS5**：第一关经代理 CONNECT Telegram 数据中心 149.154.167.51:443（无认证握手 05 01 00 → CONNECT，IPv4 ATYP=1 / 域名 ATYP=3，往返毫秒即节点延迟）；第二关经代理 CONNECT desktop.telegram.org + TLS 证书校验 + HTTP 状态行（GET，验证全链路可用无劫持）；两关串行共享单节点 20s 总预算（单关 8s）。
+  - **MTProto（v2.3.0）**：直连节点发 64 字节 obfuscated2 头 + `req_pq_multi`，要求对端回一个**带我们随机 nonce 的 resPQ**（constructor `0x05162463`）。「端口开着」不再算通过 —— 透明代理、劫持设备、随便一个 acceptance server 都能让 TCP 连上，但伪造不出这个回包。往返毫秒（连接→resPQ 解析完成）即节点延迟，预算取 `max(2s, 门槛+1s)`。
+  - **无法判定 ≠ 失败**：链接里没有 secret、或 `ee`（FakeTLS，尚未实现）时，节点记「未验证」，**不计失败**——否则用户把 secret 写错，三轮后节点会被连败拉黑，配置问题被算成节点问题。
+  - 并发 96；两类节点都计入「TG 实测 i/N」进度。
 - **1000ms 延迟门槛**：仅保留经代理到 TG 数据中心往返 ≤1000ms 的节点（固定值，与桌面版默认一致），超门槛计入「TG 未过」。
 - **分阶段进度与耗时摘要（v2.0.0；v2.1.0 并入列表头部状态条）**：刷新中显示「抓取数据源 i/N → TCP 预筛 i/N → TG 实测 i/N」+ 进度条；空闲时显示「上轮测试 N 个节点，保留 X 个，耗时 Y · 下次更新 Z」——刷新完成有据可查。
 - **列表优先布局（v2.1.0）**：首屏 = 节点列表（LazyColumn + 下拉刷新，状态条/统计/错误条/空态作为列表首项随内容滚动）；顶栏只留 标题 + 更新时间/倒计时 + 设置入口；刷新按钮为右下角 FAB（刷新中转圈）；设置（间隔 / known_good / 外观 / 数据源说明）收进底部弹层。
@@ -239,7 +243,7 @@ tgproxy-android/
 
 ## 测试
 
-`app/src/test/java/com/tgproxy/` 下 11 个 JVM 单测类对拍桌面版行为（debug/release 双变体共 170 例全绿）：
+`app/src/test/java/com/tgproxy/` 下 18 个 JVM 单测类对拍桌面版行为（debug 单变体 160 例全绿；debug+release 共 320 例）：
 
 | 测试类 | 覆盖 |
 |---|---|
@@ -247,9 +251,27 @@ tgproxy-android/
 | `ProxySortTest` | 排序三键 + null 延迟 + 兜底 + 入参不变 |
 | `ProxyRepositoryTest` | 六项统计口径（和=tested，超门槛单列）、TG 门槛剔除、TCP 不通不进 TG、进度三阶段序列、known_good 开关两端行为、失败降级、updatedAt 格式、连败拉黑四场景（三轮拉黑跳过 / 通过清零 / 超门槛清零 / 48 小时解封） |
 | `TelegramGateTest` | SOCKS5 握手字节序（方法协商/CONNECT/ATYP 1·3）、TLS GET 请求（Host/UA/Connection）、HTTP 状态行校验、握手被拒/非零错误码/EOF/连接失败、剩余预算不足 1s 放弃第二关 |
+| `MtProtoHandshakeTest` | obfuscated2 **桌面版黄金向量**（四密钥 / 加密 init 尾 / 加密请求帧 / 服务端响应解密）、resPQ 五类非法形态（错 nonce / 错 constructor / 非零 auth_key_id / 长度越界 / 过短）、secret 解析七分支（raw / dd / 超长截断 / ee 不支持 / 空 / 非法 / base64） |
+| `MtProtoProbeTest` | 假服务端**真按协议回包**（解 init → 派生密钥 → 解帧 → 取 nonce → 回加密 resPQ）：成功 RTT、错 nonce、错 constructor、立刻断连、读超时、连接被拒、帧长度非法、缺 secret 不发连接、ee 不支持、secret 非法 |
+| `ProxyRepositoryMtProtoTest` | MTProto 结论落账：通过→available+RTT、失败→tgFailed、超门槛→overThreshold、探针抛异常按失败且不影响同轮其他节点、secret 透传、TG 进度分母含 MTProto、无法判定既不算通过也不算失败 |
 | `KnownGoodStoreTest` | 读写往返、延迟状态不落盘、开关关闭不读不写、损坏回退、坏条目跳过、空列表不落盘 |
 | `KnownBadStoreTest` | 连败达标拉黑、通过清零、落盘回读、48 小时解封、开关关闭不读不写、损坏容忍、超容量淘汰 |
 | `ProxyTesterTest` | 真实 Socket：可用/拒绝/50 条混合顺序守恒 |
 | `SettingsNormalizeTest` | 间隔校正 / URL 回退 / 输入解析 / 主题模式校正 |
 | `ProxyLinksTest` | `toTelegramScheme` 纯函数 |
 | `MainViewModelTest` | 启动刷新 / 互斥 / 失败保留 / 间隔重置 / 到期刷新 / 补刷 / 首轮 0 达标清空 / 已有列表时 0 达标保留旧列表 / known_good 启动先行展示 / 开关持久化（虚拟时间） |
+
+### 变异自检（证明测试会红）
+
+```bash
+python tools/mutation_check_android.py
+```
+
+对 6 处关键实现做「改成相反的」注入（反向切片改顺序、init 尾改明文、去掉 nonce 校验、dd 错位、通过记失败、无法判定记失败），要求目标测试**变红**；每条跑完按字节恢复并校验 SHA-256。判定分四种：
+
+| 结果 | 含义 |
+|---|---|
+| `CAUGHT` | 注入成功 + 目标测试红 → 覆盖存在 |
+| `NOT_CAUGHT` | 注入成功但测试全绿 → 覆盖不足（不是通过） |
+| `INJECT_FAILED` | 锚点不匹配 → 清单过期（兼容 LF/CRLF 两种行尾） |
+| `INCONCLUSIVE` | 变异把代码打成编译错误 → 编译失败不等于捕获 |

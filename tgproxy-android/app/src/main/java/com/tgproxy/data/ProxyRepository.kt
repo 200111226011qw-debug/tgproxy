@@ -30,7 +30,7 @@ import kotlinx.coroutines.withContext
  * 代理刷新管线编排（等价桌面版 ProxyManager._run_refresh 全流程）：
  *
  * 并发抓取 → 逐源解析/去重/抽样 → known_good 优先补入 → 连续失败拉黑跳过 →
- * TCP 预筛（并发）→ TG 实测两关（仅 SOCKS5，经代理到 TG DC + 全链路站点）→
+ * TCP 预筛（并发）→ TG 实测（SOCKS5 两关 / MTProto obfuscated2 真握手双通道）→
  * 1000ms 门槛 → 五项统计（available+unverified+tgFailed+overThreshold+dropped=tested）→
  * known_good 沉淀 + 连败计数沉淀。
  *
@@ -46,6 +46,8 @@ class ProxyRepository(
     private val tgLatencyLimitMs: Int = Constants.TG_LATENCY_LIMIT_MS,
     /** 阻塞测试的执行调度器（JVM 单测注入测试调度器避免跨线程派发竞态）。 */
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    /** MTProto 真校验（与 SOCKS5 两关并列的第二条通道）。 */
+    private val mtProtoProbe: MtProtoCaller = DefaultMtProtoCaller,
 ) {
 
     /** 一轮刷新的结果：永不抛异常，失败转为 [Failure]。 */
@@ -137,7 +139,7 @@ class ProxyRepository(
             }
         }
 
-        // 第二阶段：TG 实测两关（仅 SOCKS5；MTProto 标记未验证）
+        // 第二阶段：TG 实测（SOCKS5 两关 + MTProto 真握手，无法判定的保持未验证）
         val (verified, gateStats) = testTelegramEntries(tcpOk) { done, total ->
             onProgress(RefreshProgress(RefreshStage.TG_TEST, done, total))
         }
@@ -267,15 +269,25 @@ class ProxyRepository(
     }
 
     /**
-     * 并发 TG 实测（等价桌面版 _test_telegram_entries）：
-     * 每节点一条线程内先 DC 后站点串行两关（避免对同一免费代理同时开两条连接触发限流的假失败）；
-     * 仅 SOCKS5 参与；MTProto 标记 UNVERIFIED。
+     * 并发 TG 实测（等价桌面版 _test_telegram_entries 的双通道）：
+     *
+     * - **SOCKS5**：经代理 CONNECT DC + 全链路站点两关串行（同一节点不并发开两条连接，
+     *   避免免费代理限流造成的假失败）；
+     * - **MTProto**：直连节点做 obfuscated2 握手 + `req_pq_multi`，校验 resPQ 是否回显
+     *   我们发出的 nonce（见 [MtProtoProbe]）。它自己就是代理，没有外层隧道。
+     *
+     * 两类都计入 TG 进度。**无法判定**的（链接里没 secret、`ee`/FakeTLS 未实现）
+     * 保持 UNVERIFIED 且不计失败 —— 否则用户写错 secret 的节点会被连败拉黑，
+     * 把配置问题算成节点问题。
+     *
+     * [TgGateStats] 仍然只统计 SOCKS5 两关：它的四个桶（dcFail/webFail/...）
+     * 是隧道语义，MTProto 没有这些关卡，混进去会让漏斗撒谎。
      */
     private suspend fun testTelegramEntries(
         entries: List<ProxyEntry>,
         onProgress: (Int, Int) -> Unit,
     ): Pair<List<ProxyEntry>, TgGateStats> {
-        val socks5Count = entries.count { it.type == ProxyType.SOCKS5 }
+        val total = entries.size
         val done = java.util.concurrent.atomic.AtomicInteger()
         // 两关漏斗的四个桶（并发累加，用原子计数）
         val dcFail = java.util.concurrent.atomic.AtomicInteger()
@@ -286,37 +298,18 @@ class ProxyRepository(
         val tested = withContext(ioDispatcher) {
             coroutineScope {
                 entries.map { entry ->
-                    if (entry.type != ProxyType.SOCKS5) {
-                        // 未参与 SOCKS5 实测的（MTProto）标记为未验证，不计入 TG 进度
-                        async { entry.copy(tgVerdict = TgVerdict.UNVERIFIED, latencyMs = null) }
-                    } else {
-                        async {
-                            semaphore.withPermit {
-                                val outcome = try {
-                                    // 用 testDetailed 拿落点：只看返回值的话，
-                                    // 「剪枝」与「两关通过」都非空、
-                                    // 「DC 失败」与「站点失败」都是 null，无法分桶
-                                    tgGate.testDetailed(entry.host, entry.port, tgLatencyLimitMs)
-                                } catch (e: Exception) {
-                                    GateOutcome(TgGateStage.DC_FAIL, null)
-                                }
-                                when (outcome.stage) {
-                                    TgGateStage.DC_FAIL -> dcFail.incrementAndGet()
-                                    TgGateStage.LATENCY_REJECTED -> latencyRejected.incrementAndGet()
-                                    TgGateStage.WEB_FAIL -> webFail.incrementAndGet()
-                                    TgGateStage.OK -> okCount.incrementAndGet()
-                                }
-                                val latency = outcome.latencyMs
-                                val verdict = if (latency != null) TgVerdict.PASS else TgVerdict.FAIL
-                                entry.copy(
-                                    latencyMs = latency,
-                                    tgVerdict = verdict,
-                                    status = if (latency != null) ProxyStatus.AVAILABLE else ProxyStatus.UNAVAILABLE,
-                                )
-                            }.also {
-                                onProgress(done.incrementAndGet(), socks5Count)
+                    async {
+                        val result = when (entry.type) {
+                            ProxyType.SOCKS5 -> semaphore.withPermit {
+                                socks5Entry(entry, dcFail, latencyRejected, webFail, okCount)
+                            }
+
+                            ProxyType.MTPROTO -> semaphore.withPermit {
+                                mtProtoEntry(entry)
                             }
                         }
+                        onProgress(done.incrementAndGet(), total)
+                        result
                     }
                 }.awaitAll()
             }
@@ -326,6 +319,68 @@ class ProxyRepository(
             latencyRejected = latencyRejected.get(),
             webFail = webFail.get(),
             ok = okCount.get(),
+        )
+    }
+
+    /** SOCKS5 单节点两关（并按落点累加漏斗）。 */
+    private fun socks5Entry(
+        entry: ProxyEntry,
+        dcFail: java.util.concurrent.atomic.AtomicInteger,
+        latencyRejected: java.util.concurrent.atomic.AtomicInteger,
+        webFail: java.util.concurrent.atomic.AtomicInteger,
+        okCount: java.util.concurrent.atomic.AtomicInteger,
+    ): ProxyEntry {
+        val outcome = try {
+            // 用 testDetailed 拿落点：只看返回值的话，
+            // 「剪枝」与「两关通过」都非空、
+            // 「DC 失败」与「站点失败」都是 null，无法分桶
+            tgGate.testDetailed(entry.host, entry.port, tgLatencyLimitMs)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            GateOutcome(TgGateStage.DC_FAIL, null)
+        }
+        when (outcome.stage) {
+            TgGateStage.DC_FAIL -> dcFail.incrementAndGet()
+            TgGateStage.LATENCY_REJECTED -> latencyRejected.incrementAndGet()
+            TgGateStage.WEB_FAIL -> webFail.incrementAndGet()
+            TgGateStage.OK -> okCount.incrementAndGet()
+        }
+        val latency = outcome.latencyMs
+        val verdict = if (latency != null) TgVerdict.PASS else TgVerdict.FAIL
+        return entry.copy(
+            latencyMs = latency,
+            tgVerdict = verdict,
+            status = if (latency != null) ProxyStatus.AVAILABLE else ProxyStatus.UNAVAILABLE,
+        )
+    }
+
+    /** MTProto 单节点真校验（握手成功即带上 RTT；无法判定的保持未验证）。 */
+    private fun mtProtoEntry(entry: ProxyEntry): ProxyEntry {
+        val secret = MtProtoHandshake.secretFromLink(entry.link)
+        val result = try {
+            mtProtoProbe.probe(
+                entry.host,
+                entry.port,
+                secret,
+                Constants.mtprotoBudgetMs(tgLatencyLimitMs),
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            MtProtoResult(MtProtoCode.NETWORK, detail = e.message ?: e.toString())
+        }
+        val verdict = when {
+            result.ok -> TgVerdict.PASS
+            // 缺 secret / 不支持的 secret：不是节点的错，也不是「测过但没过」
+            result.code == MtProtoCode.SECRET_EMPTY || result.code == MtProtoCode.SECRET_UNSUPPORTED ->
+                TgVerdict.UNVERIFIED
+            else -> TgVerdict.FAIL
+        }
+        return entry.copy(
+            latencyMs = if (result.ok) result.latencyMs else null,
+            tgVerdict = verdict,
+            status = if (result.ok) ProxyStatus.AVAILABLE else ProxyStatus.UNAVAILABLE,
         )
     }
 
