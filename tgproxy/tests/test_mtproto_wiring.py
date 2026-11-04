@@ -125,6 +125,22 @@ def test_crypto_unavailable_stays_unverified():
     assert manager.get_state()["mtproto_gate_stats"]["unavailable"] == 1
 
 
+def _faketls(host, port, secret, **kwargs):
+    return mh.CheckResult(False, host, port, "ee", error_code="FAKETLS_UNSUPPORTED")
+
+
+def test_faketls_stays_unverified():
+    """ee/FakeTLS 是主流分享格式：未实现必须记「无法判定」，否则全被误拉黑。"""
+    manager = pm.ProxyManager()
+    link = "tg://proxy?server=2.2.2.2&port=443&secret=ee" + SECRET_HEX
+    with _Patched(mt=_faketls):
+        results = manager._test_telegram_entries([_entry("2.2.2.2", link=link)])
+
+    assert results[0]["tg_ok"] is None
+    assert results[0]["tg_latency_ms"] is None
+    assert manager.get_state()["mtproto_gate_stats"]["unavailable"] == 1
+
+
 def test_missing_module_degrades_to_unverified():
     manager = pm.ProxyManager()
     with _Patched():

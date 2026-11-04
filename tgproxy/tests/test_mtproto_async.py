@@ -311,3 +311,12 @@ if __name__ == "__main__":
         fn()
         print("PASS", name)
     print("ALL %d TESTS PASSED" % len(fns))
+
+
+def test_async_faketls_short_circuits_without_connect():
+    async def body():
+        return await ma.check_mtproto_proxy_async("127.0.0.1", 1, "ee" + SECRET_HEX)
+
+    result = asyncio.run(body())
+    assert result.error_code == mh.ErrorCode.FAKETLS_UNSUPPORTED
+    assert result.secret_kind == "ee"

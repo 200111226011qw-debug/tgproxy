@@ -47,6 +47,9 @@ class ErrorCode:
     INVALID_INPUT = "INVALID_INPUT"
     INVALID_SECRET = "INVALID_SECRET"
     UNSUPPORTED_MODE = "UNSUPPORTED_MODE"
+    # ee/FakeTLS 尚未实现：既不能算成功，也不能算「节点失败」—— 记为「无法判定」，
+    # 上游据此保持「未验证」，避免把一大批主流格式的节点误判失败后连败拉黑。
+    FAKETLS_UNSUPPORTED = "FAKETLS_UNSUPPORTED"
     CONNECT_TIMEOUT = "CONNECT_TIMEOUT"
     RESPONSE_TIMEOUT = "RESPONSE_TIMEOUT"
     NETWORK_ERROR = "NETWORK_ERROR"
@@ -498,6 +501,15 @@ def check_mtproto_proxy(
         return CheckResult(
             False, str(host), 0, kind, dc_id,
             error_code=exc.code, error_message=exc.message,
+        )
+
+    if parsed.kind == "ee":
+        # FakeTLS 未实现：不能拿那 16 字节当 dd 去硬连 —— 对端必然断开，
+        # 把「我们用错算法」记成「节点失败」。返回无法判定，让上游保持未验证。
+        return CheckResult(
+            False, str(host), 0, kind, dc_id,
+            error_code=ErrorCode.FAKETLS_UNSUPPORTED,
+            error_message="ee/FakeTLS 未实现，无法判定（不计失败）",
         )
 
     if not host:

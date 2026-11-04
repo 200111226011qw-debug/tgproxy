@@ -408,3 +408,16 @@ if __name__ == "__main__":
         fn()
         print("PASS", name)
     print("ALL %d TESTS PASSED" % len(fns))
+
+
+def test_check_mtproto_proxy_faketls_short_circuits_without_connect(monkeypatch):
+    """ee/FakeTLS 未实现：不拿那 16 字节当 dd 硬连，也不该发起任何连接。"""
+    def boom(*args, **kwargs):
+        raise AssertionError("ee 不应发起连接")
+
+    monkeypatch.setattr(mh.socket, "create_connection", boom)
+    result = mh.check_mtproto_proxy("127.0.0.1", 443, "ee" + SECRET_HEX)
+
+    assert result.ok is False
+    assert result.error_code == mh.ErrorCode.FAKETLS_UNSUPPORTED
+    assert result.secret_kind == "ee"
