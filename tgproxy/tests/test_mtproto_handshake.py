@@ -421,3 +421,10 @@ def test_check_mtproto_proxy_faketls_short_circuits_without_connect(monkeypatch)
     assert result.ok is False
     assert result.error_code == mh.ErrorCode.FAKETLS_UNSUPPORTED
     assert result.secret_kind == "ee"
+
+def test_faketls_invalid_input_still_reports_invalid_input():
+    """入参校验优先于 ee 短路：host 为空时应报 INVALID_INPUT，而不是被 ee 抢答。"""
+    result = mh.check_mtproto_proxy("", 0, "ee" + SECRET_HEX)
+    assert result.error_code == mh.ErrorCode.INVALID_INPUT
+
+

@@ -320,3 +320,12 @@ def test_async_faketls_short_circuits_without_connect():
     result = asyncio.run(body())
     assert result.error_code == mh.ErrorCode.FAKETLS_UNSUPPORTED
     assert result.secret_kind == "ee"
+
+def test_async_faketls_invalid_input_reports_invalid_input():
+    async def body():
+        return await ma.check_mtproto_proxy_async("", 0, "ee" + SECRET_HEX)
+
+    result = asyncio.run(body())
+    assert result.error_code == mh.ErrorCode.INVALID_INPUT
+
+

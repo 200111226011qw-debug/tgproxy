@@ -503,15 +503,6 @@ def check_mtproto_proxy(
             error_code=exc.code, error_message=exc.message,
         )
 
-    if parsed.kind == "ee":
-        # FakeTLS 未实现：不能拿那 16 字节当 dd 去硬连 —— 对端必然断开，
-        # 把「我们用错算法」记成「节点失败」。返回无法判定，让上游保持未验证。
-        return CheckResult(
-            False, str(host), 0, kind, dc_id,
-            error_code=ErrorCode.FAKETLS_UNSUPPORTED,
-            error_message="ee/FakeTLS 未实现，无法判定（不计失败）",
-        )
-
     if not host:
         return CheckResult(
             False, str(host), 0, kind, dc_id,
@@ -530,6 +521,16 @@ def check_mtproto_proxy(
         return CheckResult(
             False, str(host), port_int, kind, dc_id,
             error_code=ErrorCode.INVALID_INPUT, error_message=f"端口越界: {port_int}",
+        )
+
+    if parsed.kind == "ee":
+        # FakeTLS 未实现：不能拿那 16 字节当 dd 去硬连 —— 对端必然断开，
+        # 把「我们用错算法」记成「节点失败」。返回无法判定，让上游保持未验证。
+        # 放在入参校验之后：host/port 非法时应先报 INVALID_INPUT，而不是被 ee 抢答。
+        return CheckResult(
+            False, str(host), 0, kind, dc_id,
+            error_code=ErrorCode.FAKETLS_UNSUPPORTED,
+            error_message="ee/FakeTLS 未实现，无法判定（不计失败）",
         )
 
     started = time.monotonic()
