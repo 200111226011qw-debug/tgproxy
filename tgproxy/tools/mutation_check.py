@@ -5,18 +5,32 @@
 
 四种结果：
 
-    CAUGHT         注入成功 + 目标测试出现在 FAILED 行   → 通过
-    NOT_CAUGHT     注入成功 + 测试仍然全绿               → 覆盖不足，必须修
-    INJECT_FAILED  锚点不匹配                            → 代码变了，变异列表要更新
-    WRONG_FAILURE  测试红了，但不是目标测试              → 多半是语法被打坏，误判成通过
+    CAUGHT         目标测试确实以 failure 失败              → 通过
+    NOT_CAUGHT     目标测试确实通过                          → 覆盖不足，必须修
+    INCONCLUSIVE   没拿到可信结果（没跑/error/xml 读不到）    → 重试，仍不行就人工查
+    INJECT_FAILED  锚点不匹配                                → 代码变了，变异列表要更新
 
-后两种单独区分很重要：锚点失配时若当成「没抓到」，会误判成覆盖不足；
-若当成「通过」，就是静默假绿 —— 而静默假绿正是这个脚本存在的理由。
+## 为什么不解析控制台文本
+
+早期版本靠 `ln.startswith("FAILED ")` 判断。实测会**偶发误判**：
+pytest 崩溃（INTERNALERROR）、collection error、被外部钩子打断时都不会打印 FAILED 行，
+于是「根本没跑起来」被读成「红了但不是目标测试」。
+
+三种情况当时都报成 WRONG_FAILURE：
+
+    INTERNALERROR> OSError: [safe-delete] ...   → 误判
+    ERROR tests/... - ImportError                → 误判
+    ERROR: not found: tests/a.py::nope           → 误判
+
+现在改用 `--junitxml`：判定只看 XML 里 `<testcase name=...>` 有没有 `<failure>`，
+与终端格式、输出污染、并发打印都无关。目标测试没出现在 XML 里 → INCONCLUSIVE。
+
+**结论必须来自结构，不能来自字面。**
 
 ## 行尾（这个坑栽过三次）
 
 同一份文件在不同机器上的**工作区行尾可能不同**：`core.autocrlf=true` 时
-git 检出会把 LF 转成 CRLF，而清单里的多行锚点是用 `\n` 写的。直接 count 会得到 0，
+git 检出会把 LF 转成 CRLF，而清单里的多行锚点是用 `\\n` 写的。直接 count 会得到 0，
 被报成 INJECT_FAILED —— 看起来像「代码变了」，实际只是行尾不同。
 
 所以 `_locate()` 会同时尝试 LF 与 CRLF 两种形式的锚点，**选实际匹配的那一种**，
@@ -33,7 +47,7 @@ git 检出会把 LF 转成 CRLF，而清单里的多行锚点是用 `\n` 写的�
 用法：
 
     python tools/mutation_check.py           # 跑全部
-    python tools/mutation_check.py -v        # 附带每个变异的测试输出摘要
+    python tools/mutation_check.py -v        # 附带 pytest 摘要
     python tools/mutation_check.py --list    # 只列清单，不动文件
 """
 
@@ -41,6 +55,8 @@ import hashlib
 import os
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -125,6 +141,11 @@ def _sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# 锚点定位：容忍 CRLF 工作区
+# ---------------------------------------------------------------------------
+
+
 def _locate(text, find):
     """在 text 里定位锚点，容忍 CRLF 工作区。
 
@@ -157,48 +178,126 @@ def _align_eol(s, anchor):
     return s.replace("\r\n", "\n").replace("\n", "\r\n")
 
 
-def _run_tests(paths, root):
-    cmd = [sys.executable, "-m", "pytest", "--no-header", "-q", "--tb=no", *paths]
-    proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
-    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+# ---------------------------------------------------------------------------
+# 结果判定：只看 junit xml，不看控制台文本
+# ---------------------------------------------------------------------------
 
 
-def _judge(returncode, output, test_paths):
-    """把 pytest 的结果判成 CAUGHT / NOT_CAUGHT / WRONG_FAILURE。
+def _to_classname(path_part):
+    """`tests/test_a.py` → `tests.test_a`（pytest 在 xml 里就是这么写的）。"""
+    p = path_part.replace("\\", "/")
+    if p.endswith(".py"):
+        p = p[:-3]
+    return p.replace("/", ".")
 
-    要求「目标测试」真的出现在 FAILED 行里 —— 只看 returncode 会把
-    「变异把文件改成语法错误、全部收集失败」也当成捕获成功。
+
+def _parse_junit(xml_path):
+    """返回 [(classname, name, outcome)]，outcome ∈ failure/error/skipped/passed。
+
+    xml 不存在或解析失败返回 None —— 那意味着 pytest 没走到写报告这一步。
     """
-    if returncode == 0:
-        return "NOT_CAUGHT", ""
+    try:
+        tree = ET.parse(xml_path)
+    except (OSError, ET.ParseError):
+        return None
 
-    failed_lines = [ln for ln in output.splitlines() if ln.startswith("FAILED ")]
-    targets = []
-    for path in test_paths:
-        # 参数化的 node id 是 "文件::测试名[参数]"，取测试名首段比对
-        name = path.split("::")[-1].split("[")[0]
-        targets.append(name)
-
-    hit = [ln for ln in failed_lines if any(t in ln for t in targets)]
-    if hit:
-        return "CAUGHT", hit[0]
-
-    if failed_lines:
-        return "WRONG_FAILURE", failed_lines[0]
-    tail = output.strip().splitlines()[-1:] or [""]
-    return "WRONG_FAILURE", tail[0]
+    cases = []
+    for tc in tree.iter("testcase"):
+        outcome = "passed"
+        for child in tc:
+            if child.tag in ("failure", "error"):
+                outcome = child.tag
+                break
+            if child.tag == "skipped":
+                outcome = "skipped"
+        cases.append((tc.get("classname", ""), tc.get("name", ""), outcome))
+    return cases
 
 
-def run_mutation(m, verbose=False, root=None):
+def _matches(classname, name, spec):
+    """把 junit 里的 testcase 对到清单里的 node id。"""
+    if "::" in spec:
+        file_part, name_part = spec.split("::", 1)
+        want_name = name_part.split("[")[0]
+        want_cls = _to_classname(file_part)
+        short_name = name.split("[")[0]
+        return short_name == want_name and (
+            classname == want_cls or classname.endswith("." + want_cls)
+        )
+    want_cls = _to_classname(spec)
+    return classname == want_cls or classname.endswith("." + want_cls)
+
+
+def _tail(text, n=3):
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    return " / ".join(lines[-n:])[:200]
+
+
+def _judge(cases, test_paths, output):
+    """纯判定函数：输入 junit 结果与原始输出，输出 (status, detail)。
+
+    CAUGHT 只认 `failure`（断言失败）。
+    `error` 是 fixture/collect 层的问题，不算「测试捕获了变异」，报 INCONCLUSIVE。
+    """
+    if cases is None:
+        return "INCONCLUSIVE", "junit xml 读不到（pytest 可能提前退出）：" + _tail(output)
+
+    matched = [
+        (cls, nm, oc) for cls, nm, oc in cases
+        if any(_matches(cls, nm, spec) for spec in test_paths)
+    ]
+    if not matched:
+        return "INCONCLUSIVE", (
+            "目标测试没有出现在结果里（收集错误/被中断/名字打错）：" + _tail(output)
+        )
+
+    failures = [c for c in matched if c[2] == "failure"]
+    if failures:
+        cls, nm, _ = failures[0]
+        return "CAUGHT", "%s::%s 失败" % (cls, nm)
+
+    errors = [c for c in matched if c[2] == "error"]
+    if errors:
+        cls, nm, _ = errors[0]
+        return "INCONCLUSIVE", "%s::%s 是 error 而非 failure（fixture/环境问题）" % (cls, nm)
+
+    return "NOT_CAUGHT", ""
+
+
+def _evaluate_once(test_paths, root):
+    """跑一次 pytest，用 junit xml 判定。返回 (status, detail, output)。"""
+    fd, xml_path = tempfile.mkstemp(prefix="mutjunit-", suffix=".xml")
+    os.close(fd)
+    try:
+        cmd = [sys.executable, "-m", "pytest",
+               "-p", "no:cacheprovider",
+               "--junitxml", xml_path,
+               "-q", "--tb=no", *test_paths]
+        proc = subprocess.run(cmd, cwd=root, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace")
+        output = (proc.stdout or "") + (proc.stderr or "")
+        status, detail = _judge(_parse_junit(xml_path), test_paths, output)
+        return status, detail, output
+    finally:
+        try:
+            os.unlink(xml_path)
+        except OSError:
+            pass
+
+
+def run_mutation(m, verbose=False, root=None, retries=1):
     """注入一项变异，跑指定测试，无论结果如何都恢复原文件。
+
+    INCONCLUSIVE 会重试（默认 1 次）：这类结果来自执行环境的偶发干扰
+    （外部钩子打断、临时目录清理失败），重试一次通常就正常。
+    仍不明确就如实报出来，而不是猜一个结论。
 
     root 可覆盖项目根（测试用临时目录时可传），默认是本文件上一级。
     """
     root = root or ROOT
     path = os.path.join(root, m["file"])
     if not os.path.isfile(path):
-        return "INJECT_FAILED", "文件不存在：%s" % m["file"]
+        return "INCONCLUSIVE", "文件不存在：%s" % m["file"]
 
     original = open(path, "rb").read()
     digest = _sha(original)
@@ -217,11 +316,21 @@ def run_mutation(m, verbose=False, root=None):
         with open(path, "w", encoding="utf-8", newline="") as fh:
             fh.write(mutated)
 
-        rc, out = _run_tests(m["tests"], root)
-        status, detail = _judge(rc, out, m["tests"])
+        status, detail, output = "INCONCLUSIVE", "", ""
+        notes = ""
+        for attempt in range(retries + 1):
+            status, detail, output = _evaluate_once(m["tests"], root)
+            if status != "INCONCLUSIVE":
+                break
+            if attempt < retries:
+                # 不能改写 detail：下一轮会被 _evaluate_once 的返回值覆盖
+                notes += "第 %d 次 INCONCLUSIVE（%s），已重试；" % (attempt + 1, detail[:80])
+        if notes:
+            detail = notes + detail
+
         if verbose:
             summary = " / ".join(
-                ln for ln in out.splitlines() if "passed" in ln or "failed" in ln
+                ln for ln in output.splitlines() if "passed" in ln or "failed" in ln
             )
             detail = detail + " || " + summary
         return status, detail
@@ -245,7 +354,7 @@ def main(argv):
 
     print("共 %d 项变异（默认期望 CAUGHT，自检项期望 NOT_CAUGHT）\n" % len(MUTATIONS))
 
-    tally = {"CAUGHT": 0, "NOT_CAUGHT": 0, "INJECT_FAILED": 0, "WRONG_FAILURE": 0}
+    tally = {"CAUGHT": 0, "NOT_CAUGHT": 0, "INCONCLUSIVE": 0, "INJECT_FAILED": 0}
     bad = []
 
     for i, m in enumerate(MUTATIONS, 1):
@@ -264,8 +373,9 @@ def main(argv):
         print("\n以下变异的结果与期望不符：")
         for name, expect, got, detail in bad:
             print("  - %s：期望 %s，实际 %s %s" % (name, expect, got, detail[:200]))
-        print("\nNOT_CAUGHT 说明测试没守住这条接线；INJECT_FAILED 说明锚点已过期"
-              "（或行尾不一致），需按当前代码更新 MUTATIONS。")
+        print("\nNOT_CAUGHT 说明测试没守住这条接线；"
+              "INJECT_FAILED 说明锚点已过期（或行尾不一致）；"
+              "INCONCLUSIVE 说明这次运行没拿到可信结果，需人工看一眼那个测试。")
         return 1
 
     print("\n全部符合期望。")
