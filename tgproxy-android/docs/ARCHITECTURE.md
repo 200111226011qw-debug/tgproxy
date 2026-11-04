@@ -45,6 +45,15 @@
 > 5. **测试**：新增 `MtProtoHandshakeTest`（17 例，含桌面版黄金向量与 secret 七分支）、`MtProtoProbeTest`（11 例，假服务端按协议回包）、`ProxyRepositoryMtProtoTest`（7 例，结论落账）；`ProxyRepositoryTest` 的 MTProto 用例改为「ee → 未验证 + 探针确实被调用」。18 类 161 例 × 双变体 = 322 全绿；`tools/mutation_check_android.py` 7 条变异全部 CAUGHT。
 > 6. **版本**：versionCode 13 / versionName 2.3.0。
 
+> ## ⚠️ v2.4.0 变更记录（2026-11-04，抓取镜像竞速，叠加于上方 v2.3.0 之上，**未发布**）
+>
+> 1. **完整性下限先落地**：`Constants.FETCH_MIN_BYTES = 64` + `hasUsableLine`（至少一条非注释行）在竞速之前单独提交。没有它，竞速会让「直连返回 0 字节（CDN 穿透/截断）」更快胜出，整轮零节点 —— 竞速是负优化。
+> 2. **单源镜像竞速**：新增 `data/MirrorRace.kt`（纯协程：错峰 `index×250ms` → 首个通过校验的候选胜出 → 取消其余 → 全部失败时错误带各自原因）。`ProxyFetcher.fetch` 由「顺序回退」改为 `race`。
+> 3. **取消语义（关键技术点）**：候选抓取用 `suspendCancellableCoroutine` + OkHttp `enqueue`，`invokeOnCancellation → call.cancel()`。`execute()` 是阻塞调用、协程取消打断不了，落败候选会把 11.9 MB 列表下完。
+> 4. **并发宽度（有意偏离桌面）**：`Constants.FETCH_RACE_MAX = 8`（桌面 64）。20 源 × 4 候选峰值 80 条连接，手机上会发烫；`MirrorRace` 的 Semaphore 是实例字段（`ProxyFetcher` 单例），跨源共享该上限。**这是刻意取舍，不是 bug。**
+> 5. **不迁移**：桌面 `Age`/freshness 面板与 `via_mirror` 胜负上报**这一版不做**（安卓无源面板）；64 字节下限只属于「单个响应完整性」，不作用于「多源合并」层。
+> 6. **测试**：新增 `MirrorRaceTest`（5 例，快者先到/空体被拒/全败带原因/落败取消/错峰虚拟时间）与 `ProxyFetcherTest`（6 例，min_bytes + validator + call.cancel 透传）；变异自检新增 4 条（去 min_bytes / 去 validator / 改成顺序 / 去 stagger）→ 11/11 CAUGHT。
+
 ---
 
 ## 1. 实现方案与框架选型

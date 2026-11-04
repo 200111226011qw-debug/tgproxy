@@ -1,12 +1,12 @@
 package com.tgproxy.data
 
 import com.tgproxy.Constants
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
@@ -30,48 +30,69 @@ fun interface ProxySource {
 class ProxyFetcher(
     private val client: Call.Factory = defaultClient(),
     private val minBytes: Int = Constants.FETCH_MIN_BYTES,
+    private val race: MirrorRace = MirrorRace(),
 ) : ProxySource {
 
-    override suspend fun fetch(url: String): String {
-        var lastError: IOException? = null
-        for (candidate in listOf(url) + mirrorUrls(url)) {
-            try {
-                return fetchOnce(candidate)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: IOException) {
-                lastError = e
-            }
-        }
-        throw lastError ?: IOException("抓取失败：$url")
-    }
+    override suspend fun fetch(url: String): String =
+        race.race(buildCandidates(url)) { candidateUrl -> fetchCandidate(candidateUrl) }
 
-    private suspend fun fetchOnce(url: String): String = withContext(Dispatchers.IO) {
+    /**
+     * 单个候选的 HTTP 抓取 + 完整性校验。
+     *
+     * 用 enqueue（异步）而非 execute：execute 是阻塞调用，协程取消打断不了它，
+     * 竞速里落败的候选靠「取消协程 → invokeOnCancellation → call.cancel()」真正断掉，
+     * 否则手机会继续把整份列表下完。internal 供单测直接验证取消链路。
+     */
+    internal suspend fun fetchCandidate(url: String): String = suspendCancellableCoroutine { cont ->
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", Constants.USER_AGENT)
             .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IOException("HTTP ${response.code}")
+        val call = client.newCall(request)
+        cont.invokeOnCancellation { call.cancel() }
+        call.enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                cont.resumeWith(Result.failure(e))
             }
-            val body = response.body?.string() ?: ""
-            validateBody(body)
-            body
-        }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    try {
+                        if (!response.isSuccessful) {
+                            cont.resumeWith(Result.failure(IOException("HTTP ${response.code}")))
+                            return
+                        }
+                        val bytes = response.body?.bytes() ?: ByteArray(0)
+                        validateBody(bytes)
+                        cont.resume(bytes.toString(Charsets.UTF_8), null)
+                    } catch (e: Exception) {
+                        cont.resumeWith(Result.failure(e))
+                    }
+                }
+            }
+        })
+    }
+
+    /** 直连 + 3 个 jsDelivr 镜像候选（label 与桌面 direct / jsdelivr-{cdn,gcore,fastly} 对齐）。 */
+    private fun buildCandidates(url: String): List<MirrorRace.Candidate> {
+        val mirrors = mirrorUrls(url)
+        if (mirrors.isEmpty()) return listOf(MirrorRace.Candidate(url, "direct"))
+        val labels = Constants.MIRROR_HOSTS.map { "jsdelivr-${it.substringBefore('.')}" }
+        return listOf(MirrorRace.Candidate(url, "direct")) +
+            mirrors.mapIndexed { index, mirror -> MirrorRace.Candidate(mirror, labels[index]) }
     }
 
     /**
      * 单个候选响应的完整性下限（等价桌面版 evaluate_response 的 EMPTY / UNUSABLE 两关）。
      *
      * 空体 / 纯注释在「端口通、返回 2xx」时也会发生（CDN 缓存穿透、上游截断），
-     * 不判掉的话，一轮抓取会把「0 个节点」当成功吞下。
+     * 不判掉的话，一轮抓取会把「0 个节点」当成功吞下。按**字节**量（桌面用 len(raw)）。
      */
-    private fun validateBody(body: String) {
-        if (body.length < minBytes) {
-            throw IOException("响应仅 ${body.length} 字节（< $minBytes），按截断处理")
+    private fun validateBody(bytes: ByteArray) {
+        if (bytes.size < minBytes) {
+            throw IOException("响应仅 ${bytes.size} 字节（< $minBytes），按截断处理")
         }
-        if (!hasUsableLine(body)) {
+        if (!hasUsableLine(bytes.toString(Charsets.UTF_8))) {
             throw IOException("响应无有效代理行")
         }
     }
