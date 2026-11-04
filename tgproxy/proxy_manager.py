@@ -95,6 +95,10 @@ FETCH_MAX_SOURCES = 20  # 与 app.py 的 MAX_PROXY_LIST_URLS 对齐，用户配�
 # 「直连烧满 15s → 顺序回退镜像」逻辑，用于 A/B 与线上回滚。
 FETCH_RACE_ENABLED = os.environ.get("TGPROXY_FETCH_RACE", "1") != "0"
 FETCH_RACE_STAGGER_MS = int(_env_float("TGPROXY_FETCH_STAGGER", 250))
+# 镜像缓存年龄超过这个秒数就标 stale。jsDelivr 的 s-maxage 是 43200（12 小时），
+# 刷新间隔默认 10 分钟 —— 也就是说「看起来刷新了，其实是半天前的列表」是完全可能的。
+# 这里只负责如实上报年龄，不改变抓取行为；阈值可用环境变量覆盖。
+FETCH_STALE_AFTER_SEC = int(_env_float("TGPROXY_FETCH_STALE_SEC", 900))
 TEST_TIMEOUT_SEC = _env_float("TGPROXY_TCP_TIMEOUT", 2.0)
 # TCP 预筛超时的派生规则（见 tcp_timeout_for）：门槛 + 余量，且不低于 TEST_TIMEOUT_SEC。
 # TEST_TIMEOUT_SEC 是**下限**，调低它不会突破「预筛 ≥ 门槛」的约束——这正是耦合要保证的。
@@ -466,10 +470,53 @@ def _http_get(url, timeout):
         return response.read().decode("utf-8", errors="replace")
 
 
+# 每个抓取线程各自一份，天然隔离：_fetch_one 在同一个线程里调用
+# fetch_proxy_text 之后立刻 consume，不会与其他源串味。
+_FETCH_META = threading.local()
+
+
+def _set_fetch_meta(age_seconds):
+    _FETCH_META.age_seconds = age_seconds
+
+
+def consume_fetch_meta():
+    """取出并清空本线程最近一次 fetch_proxy_text 的缓存年龄（秒）；未知为 None。"""
+    age = getattr(_FETCH_META, "age_seconds", None)
+    _FETCH_META.age_seconds = None
+    return age
+
+
+def summarize_fetch_meta(fetched, stale_after=None):
+    """汇总本轮抓取的新鲜度（纯函数，便于单测）。
+
+    年龄取所有成功源里**最小**的那个：只要有一个源是新的，合并后的列表就是新的。
+    读不到 `Age` 的源（直连、或上游没回该头）不参与计算 —— 把「未知」当成 0
+    会伪造出「刚刚更新」的假象。
+    """
+    if stale_after is None:
+        stale_after = FETCH_STALE_AFTER_SEC
+    ages = [item.get("age_seconds") for item in fetched
+            if item and item.get("status") == "ok"
+            and item.get("age_seconds") is not None]
+    freshest = min(ages) if ages else None
+    return {
+        "age_seconds": freshest,
+        "stale": freshest is not None and freshest > stale_after,
+        "stale_after_sec": stale_after,
+        "via_mirror_sources": sum(
+            1 for item in fetched if item and item.get("via_mirror")),
+    }
+
+
 def fetch_proxy_text(url, timeout=None):
     """抓取代理列表文本；直连与 jsDelivr 镜像并发竞速，取首个完整响应。
 
     返回 (text, via_mirror)。
+
+    新鲜度通过 `consume_fetch_meta()` 取：**刻意不改签名**。这个函数在 5 处测试
+    里被 `def fake(url, timeout=None)` 打桩，加参数会让所有桩失效（表现为
+    fetch 阶段秒失败、整轮 stats 归零）。年龄放在 thread-local 里，每个
+    `_fetch_one` 在自己的线程里取，互不串味。
 
     超时语义变化：旧实现是「每个候选各给 timeout」（最坏 5×15s=75s）；竞速是
     「整体给 timeout」。直连在 0ms 起跑、独占满额预算，所以 15s 内能返回的慢源
@@ -479,14 +526,20 @@ def fetch_proxy_text(url, timeout=None):
     """
     if timeout is None:
         timeout = FETCH_TIMEOUT_SEC
+    # 每次进入先清空，避免上一轮/上个源的值串到这一次
+    _set_fetch_meta(None)
 
     if not FETCH_RACE_ENABLED:
         last_error = None
         for candidate in [url] + mirror_urls(url):
             try:
-                return _http_get(candidate, timeout), candidate != url
+                text = _http_get(candidate, timeout)
             except Exception as exc:
                 last_error = exc
+                continue
+            # 顺序回退路径拿不到响应头（_http_get 只回文本），年龄一律未知
+            _set_fetch_meta(None)
+            return text, candidate != url
         raise last_error
 
     # 复用 mirror_urls()：_RAW_URL_RE / MIRROR_HOSTS 是上游唯一真源，
@@ -506,6 +559,7 @@ def fetch_proxy_text(url, timeout=None):
         utf8_errors="replace",
     )
     if result.ok:
+        _set_fetch_meta(result.age_seconds)
         return result.body, result.source != "direct"
 
     detail = "; ".join("%s=%s" % (item.label, item.code) for item in result.attempts)
@@ -919,6 +973,10 @@ class ProxyManager:
         self._updated_at = None
         self._fetching = False
         self._error = None
+        # 上一轮抓取的新鲜度：{"age_seconds", "stale", "via_mirror_sources"}。
+        # 镜像缓存最长 12 小时，而刷新间隔 10 分钟 —— 数据可能远比界面显示的旧，
+        # 这里只负责如实上报，不改变抓取策略。
+        self._fetch_meta = {}
         # 上一轮的分阶段耗时（秒）：fetch / prepare / tcp / tg / commit / total。
         # 纯度量，不参与任何判定；P2（流水线化）要不要做，取决于 tcp 与 tg 的占比。
         self._stage_durations = {}
@@ -988,6 +1046,7 @@ class ProxyManager:
                 "stage_durations": dict(self._stage_durations),
                 "tg_gate_stats": dict(self._tg_gate_stats),
                 "mtproto_gate_stats": dict(self._mtproto_gate_stats),
+                "fetch_meta": dict(self._fetch_meta),
                 "progress": dict(self._live_progress),
                 "sources": [dict(item) for item in self._sources],
                 "proxies": [dict(item) for item in sort_proxies(self._proxies)],
@@ -1041,11 +1100,13 @@ class ProxyManager:
                 stats = dict(self._stats)
                 stages = dict(self._stage_durations)
                 gates = dict(self._tg_gate_stats)
+                mtproto_gates = dict(self._mtproto_gate_stats)
                 error = self._error
             if extra is None:
                 # 异常退出：阶段没跑完，统计一律归零（与安卓端失败轮一致），
                 # 别拿上一轮的数字充数
                 ok, stats_for_log, gates_for_log, stages_for_log = False, {}, {}, {}
+                mtproto_for_log = {}
             else:
                 # over_threshold / tested 现在就是 _stats 的字段，日志不再自己算
                 # 一遍 —— 同一个数只有一处来源
@@ -1063,6 +1124,7 @@ class ProxyManager:
                 }
                 gates_for_log = _gate_counts(gates)
                 stages_for_log = stages
+                mtproto_for_log = mtproto_gates
                 # 全源抓取失败算失败：安卓端那种情况是抛异常 → Failure
                 ok = not extra.get("fetch_failed_all")
             record = round_log.build_record(
@@ -1072,6 +1134,7 @@ class ProxyManager:
                 stats=stats_for_log,
                 tg_stats=gates_for_log,
                 stage_durations=stages_for_log,
+                mtproto_stats=mtproto_for_log,
             )
             merged = round_log.append_round(self._rounds_path, record)
             with self._lock:
@@ -1084,10 +1147,13 @@ class ProxyManager:
         try:
             text, via_mirror = fetch_proxy_text(url)
         except Exception as exc:
+            consume_fetch_meta()  # 失败也要清，避免残留值被下一次误读
             return {"url": url, "status": "failed", "kept": 0,
-                    "via_mirror": False, "error": str(exc), "text": None}
+                    "via_mirror": False, "error": str(exc), "text": None,
+                    "age_seconds": None}
         return {"url": url, "status": "ok", "kept": 0,
-                "via_mirror": via_mirror, "error": None, "text": text}
+                "via_mirror": via_mirror, "error": None, "text": text,
+                "age_seconds": consume_fetch_meta()}
 
     def _run_refresh(self):
         round_started = time.perf_counter()
@@ -1107,6 +1173,8 @@ class ProxyManager:
                 fetched_done += 1
                 self._set_progress("fetch", fetched_done, len(urls))
         stages["fetch"] = time.perf_counter() - t_stage
+        with self._lock:
+            self._fetch_meta = summarize_fetch_meta(fetched)
         self._set_progress("prepare", 0, 0)
         t_stage = time.perf_counter()
 

@@ -66,6 +66,9 @@ class Attempt:
     elapsed_ms: float = 0.0
     detail: str = ""
     body: str = ""
+    # CDN 缓存年龄（秒）。取自响应头 Age，仅镜像/代理链路会有；
+    # None 表示「没有这个头」（直连源通常如此），不是「年龄为 0」。
+    age_seconds: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +78,7 @@ class FetchResult:
     body: str = ""
     source: str = ""
     attempts: tuple[Attempt, ...] = ()
+    age_seconds: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +92,25 @@ def default_validator(text: str) -> bool:
         if stripped and not stripped.startswith("#"):
             return True
     return False
+
+
+def age_seconds(headers: dict[str, str]) -> Optional[int]:
+    """从响应头读 CDN 缓存年龄（秒）。
+
+    jsDelivr 的 `Cache-Control: ... s-maxage=43200` 意味着列表最长可能陈旧
+    12 小时，而 `?v=` 之类的查询串对缓存键无效（实测无效）。`Age` 是唯一
+    能编程读到的新鲜度信号——读不到就返回 None，绝不臆测为 0。
+    """
+    if not headers:
+        return None
+    raw = headers.get("age")
+    if raw is None:
+        return None
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
 
 
 def _decompress(raw: bytes, encoding: str) -> bytes:
@@ -257,6 +280,7 @@ async def _attempt(
         (time.monotonic() - started) * 1000.0,
         detail,
         body if code == FetchCode.OK else "",
+        age_seconds(headers),
     )
 
 
@@ -331,7 +355,8 @@ async def race_mirrors_async(
 
     if winner is not None:
         return FetchResult(
-            True, FetchCode.OK, winner.body, winner.label, tuple(attempts)
+            True, FetchCode.OK, winner.body, winner.label, tuple(attempts),
+            winner.age_seconds,
         )
     return FetchResult(False, FetchCode.ALL_FAILED, attempts=tuple(attempts))
 

@@ -98,7 +98,8 @@ def append_round(path, record, max_entries=ROUND_LOG_MAX_ENTRIES):
     return merged
 
 
-def build_record(ok, error, elapsed_ms, stats, tg_stats, stage_durations, now=None):
+def build_record(ok, error, elapsed_ms, stats, tg_stats, stage_durations, now=None,
+                 mtproto_stats=None):
     """组装一条轮次记录（纯函数，便于单测）。
 
     :param ok: 流程是否走通。**全源抓取失败算失败**（与安卓端一致：
@@ -109,6 +110,8 @@ def build_record(ok, error, elapsed_ms, stats, tg_stats, stage_durations, now=No
     :param stats: 已按**日志口径**换算好的 8 个字段（见模块注释）
     :param tg_stats: {"dc_fail", "latency_rejected", "web_fail", "ok"}
     :param stage_durations: 秒为单位的阶段耗时 {"fetch","prepare","tcp","tg","commit","total"}
+    :param mtproto_stats: {"tested", "ok", "fail", "unavailable"}；缺省全 0。
+               安卓端目前不写这一段，读取方按缺省处理即可（只增不改）。
     """
     stamp = time.strftime(TIME_FORMAT, time.localtime(now)) if now is not None \
         else time.strftime(TIME_FORMAT)
@@ -132,6 +135,14 @@ def build_record(ok, error, elapsed_ms, stats, tg_stats, stage_durations, now=No
             "latency_rejected": int(tg_stats.get("latency_rejected", 0)),
             "web_fail": int(tg_stats.get("web_fail", 0)),
             "ok": int(tg_stats.get("ok", 0)),
+        },
+        # MTProto 侧的计数。加这一段是为了让「首轮是不是干净」可事后回看：
+        # 之前 mtproto_gate_stats 只存在内存里，下一轮就被覆盖，冷启动证据会丢。
+        "mtproto": {
+            "tested": int((mtproto_stats or {}).get("tested", 0)),
+            "ok": int((mtproto_stats or {}).get("ok", 0)),
+            "fail": int((mtproto_stats or {}).get("fail", 0)),
+            "unavailable": int((mtproto_stats or {}).get("unavailable", 0)),
         },
         "durations": {
             key + "_ms": int(round(float(stage_durations.get(key, 0.0)) * 1000.0))
