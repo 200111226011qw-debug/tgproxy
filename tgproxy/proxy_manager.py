@@ -987,7 +987,9 @@ class ProxyManager:
         self._updated_at = None
         self._fetching = False
         self._error = None
-        # 上一轮抓取的新鲜度：{"age_seconds", "stale", "via_mirror_sources"}。
+        # 上一轮抓取的新鲜度，形状见 summarize_fetch_meta()：
+        # {age_seconds, age_seconds_oldest, age_seconds_newest, stale,
+        #  stale_after_sec, sources_counted, via_mirror_sources}
         # 镜像缓存最长 12 小时，而刷新间隔 10 分钟 —— 数据可能远比界面显示的旧，
         # 这里只负责如实上报，不改变抓取策略。
         self._fetch_meta = {}
