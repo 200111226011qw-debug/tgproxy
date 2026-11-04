@@ -7,8 +7,9 @@ enum class ProxyType { SOCKS5, MTPROTO }
 enum class ProxyStatus { AVAILABLE, UNAVAILABLE }
 
 /**
- * TG 实测结论：true=两关通过；false=未通过（含超门槛）；
- * null=未参与实测（MTProto）。
+ * TG 实测结论：PASS=实测通过；FAIL=实测未通过（含超门槛）；
+ * UNVERIFIED=**无法判定**（MTProto 链接缺 secret、或 `ee`/FakeTLS 尚未实现）——
+ * 它不是「没测」，更不是「失败」：算失败会让配置问题把节点连败拉黑。
  */
 enum class TgVerdict { PASS, FAIL, UNVERIFIED }
 
@@ -21,7 +22,7 @@ enum class TgVerdict { PASS, FAIL, UNVERIFIED }
  * @property type 代理类型
  * @property latencyMs 经代理到 Telegram 数据中心的往返毫秒（TG 实测通过后回填）；失败为 null
  * @property status TCP 预筛状态
- * @property tgVerdict TG 实测结论（UNVERIFIED=MTProto 未参与）
+ * @property tgVerdict TG 实测结论（UNVERIFIED=无法判定：缺 secret / 不支持的 secret 类型）
  * @property location 地区（元数据）
  * @property isp ISP（元数据）
  * @property addedAt 入库时间（元数据，形态 `MM-dd HH:mm`）
@@ -46,7 +47,7 @@ data class ProxyEntry(
  * （本轮 TCP 预筛总数）。桌面版的 tg_failed = 这里的 tgFailed + overThreshold（含超慢口径）。
  *
  * @property available TG 实测通过且延迟 ≤ 门槛，保留在列表中的条数
- * @property unverified 未参与 TG 实测的条数（MTProto）
+ * @property unverified 无法判定的条数（MTProto 缺 secret / ee 未实现）
  * @property tgFailed TG 两关未通过（握手/连接/劫持失败）
  * @property overThreshold TG 两关通过但延迟 > 门槛被剔除（节点活着但太慢）
  * @property dropped TCP 预筛不通被剔除的条数

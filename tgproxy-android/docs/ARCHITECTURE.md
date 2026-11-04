@@ -36,6 +36,15 @@
 > 2. **连败拉黑（对齐桌面 v1.9.0）**：新增纯 Kotlin `KnownBadStore`（应用私有目录 known_bad.json；`KNOWN_BAD_STREAK_LIMIT=3` / `KNOWN_BAD_EXPIRY_MS=48h` / `KNOWN_BAD_MAX_ENTRIES=10000`，时钟注入可测；记录只在内存累加、轮末统一 persist）。管线接入：抽样后过滤 `isBlacklisted` 节点（不进 TCP 预筛）→ TCP 不通或 TG FAIL 连败 +1 → TG PASS（含超门槛）清零 → 轮末落盘。`Stats` 新增 `blacklisted`（独立于 tested 口径）；设置弹层数据源说明补充拉黑规则；空态卡补充「连续失败拉黑跳过 N 个」行。
 > 3. **测试**：新增 `KnownBadStoreTest`（7 例）+ `ProxyRepositoryTest` 连败四场景（4 例）；11 类 85 例 × 双变体 = 170 全绿。
 
+> ## ⚠️ v2.3.0 变更记录（2026-11-04，MTProto 真校验，叠加于上方 v2.1.0 之上）
+>
+> 1. **MTProto 从「未验证」改为真握手**：新增 `data/MtProtoHandshake.kt`（纯协议：secret 解析 / 四密钥派生 / 64 字节 obfuscated2 头 / `req_pq_multi` 组包 / secure 封帧 / `resPQ` 校验）与 `data/MtProtoProbe.kt`（直连节点 → 发头 + 请求 → 读帧 → 校验 nonce 回显 → 往返毫秒即延迟）。与桌面版 `mtproto_handshake.py` **字节级对齐**（反向切片、init 尾只发密文但状态推进 64 字节、服务端方向流从 0 开始）。
+> 2. **为什么要改**：原第一关只做 SOCKS5 CONNECT 到 DC 的 TCP 往返，「端口开着」就算过；透明代理 / 劫持设备 / 随便一个 acceptance server 都能满足。真握手的判据是「对端回了带我们随机 nonce 的 `resPQ`（constructor `0x05162463`）」，假节点伪造不出。
+> 3. **结论三态不变，语义收紧**：`PASS`（握手成功 + RTT）/ `FAIL`（超时、协议错、假节点）/ `UNVERIFIED`（缺 secret、`ee`/FakeTLS 未实现）。`UNVERIFIED` **不计失败**：否则 secret 写错会让节点三轮后被连败拉黑，配置问题被记成节点问题。`TgGateStats` 仍只统计 SOCKS5 两关（MTProto 没有隧道关卡，混入会让漏斗撒谎）。
+> 4. **预算**：`Constants.mtprotoBudgetMs() = max(2000, 门槛+1000)`，与桌面版 `mtproto_budget_for` 同源 —— 预算必须 ≥ 门槛 + 余量，否则「本可过门槛」的节点会被预算砍成「失败」而不是「太慢」。
+> 5. **测试**：新增 `MtProtoHandshakeTest`（17 例，含桌面版黄金向量与 secret 七分支）、`MtProtoProbeTest`（11 例，假服务端按协议回包）、`ProxyRepositoryMtProtoTest`（7 例，结论落账）；`ProxyRepositoryTest` 的 MTProto 用例改为「ee → 未验证 + 探针确实被调用」。18 类 160 例 × 双变体 = 320 全绿；`tools/mutation_check_android.py` 6 条变异全部 CAUGHT。
+> 6. **版本**：versionCode 13 / versionName 2.3.0。
+
 ---
 
 ## 1. 实现方案与框架选型
