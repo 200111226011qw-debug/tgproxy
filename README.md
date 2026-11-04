@@ -9,7 +9,7 @@
 ## 仓库结构
 
 ```
-├── tgproxy/                   # 桌面版：Python 标准库，零第三方依赖，python app.py 一条命令启动
+├── tgproxy/                   # 桌面版：Python 标准库 + 可选 cryptography（MTProto 真校验），python app.py 一条命令启动
 ├── tgproxy-android/           # 安卓版：Kotlin + Compose，Android Studio 打开即构建
 ├── version-release-client/    # 版本发布管理客户端：单文件 HTML，双击即用
 └── docs/release-notes/        # 各版本 Release 正文归档（与线上逐字节一致）
