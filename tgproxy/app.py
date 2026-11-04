@@ -115,6 +115,30 @@ def normalize_proxy_list_urls(value):
     return cleaned or list(DEFAULT_PROXY_LIST_URLS)
 
 
+def normalize_mtproto_list_urls(value):
+    """校正 MTProto 专用数据源列表。
+
+    与 proxy_list_urls 的关键区别：**允许为空，且默认就是空**。
+
+    默认源里没有任何一个会产出 t.me/proxy 链接（实测 5 个源 5753 行，命中 0），
+    所以 MTProto 真校验在默认配置下永远不执行。补一个「看起来能用」的第三方
+    MTProto 列表进默认值，等于替所有用户做了一次信任决定——而我没有比用户
+    更好的信息去判断那个源的质量。留空，由用户自己配。
+    """
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    cleaned = []
+    for item in value:
+        url = str(item or "").strip()
+        if url.startswith(("http://", "https://")) and url not in cleaned:
+            cleaned.append(url)
+        if len(cleaned) >= MAX_PROXY_LIST_URLS:
+            break
+    return cleaned
+
+
 def normalize_config(config):
     """校正配置项类型与取值范围。"""
     try:
@@ -130,6 +154,7 @@ def normalize_config(config):
     if config.get("proxy_list_urls") is None:
         config["proxy_list_urls"] = urls
     config["proxy_list_urls"] = normalize_proxy_list_urls(config.get("proxy_list_urls"))
+    config["mtproto_list_urls"] = normalize_mtproto_list_urls(config.get("mtproto_list_urls"))
 
     try:
         tg_limit = int(config.get("max_tg_latency_ms", TG_LATENCY_LIMIT_MS))
@@ -162,6 +187,8 @@ def load_config():
     config = {
         "interval_minutes": 10,
         "proxy_list_urls": list(DEFAULT_PROXY_LIST_URLS),
+        # MTProto 专用源，默认空（见 normalize_mtproto_list_urls 的说明）
+        "mtproto_list_urls": [],
         "max_tg_latency_ms": TG_LATENCY_LIMIT_MS,
         "known_good_enabled": True,
         "port": DEFAULT_PORT,
@@ -400,13 +427,15 @@ class TgProxyServer(ThreadingHTTPServer):
         return {
             "interval_minutes": self.settings["interval_minutes"],
             "proxy_list_urls": list(self.settings["proxy_list_urls"]),
+            "mtproto_list_urls": list(self.settings.get("mtproto_list_urls") or []),
             "max_tg_latency_ms": self.settings["max_tg_latency_ms"],
             "known_good_enabled": self.settings["known_good_enabled"],
             "port": self.server_address[1],
         }
 
     def update_settings(self, interval_minutes=None, proxy_list_urls=None,
-                        max_tg_latency_ms=None, known_good_enabled=None):
+                        max_tg_latency_ms=None, known_good_enabled=None,
+                        mtproto_list_urls=None):
         """更新设置：立即生效并持久化到 config.json。"""
         if interval_minutes is not None:
             self.settings["interval_minutes"] = interval_minutes
@@ -415,6 +444,9 @@ class TgProxyServer(ThreadingHTTPServer):
         if proxy_list_urls is not None:
             self.settings["proxy_list_urls"] = proxy_list_urls
             self.manager.set_proxy_list_urls(proxy_list_urls)
+        if mtproto_list_urls is not None:
+            self.settings["mtproto_list_urls"] = mtproto_list_urls
+            self.manager.set_mtproto_list_urls(mtproto_list_urls)
         if max_tg_latency_ms is not None:
             self.settings["max_tg_latency_ms"] = max_tg_latency_ms
             self.manager.set_max_tg_latency_ms(max_tg_latency_ms)
@@ -868,6 +900,7 @@ def main():
         source_health_path=os.path.join(DATA_DIR, "source_health.json"),
         known_bad_path=os.path.join(DATA_DIR, "known_bad.json"),
         rounds_path=os.path.join(DATA_DIR, "rounds.jsonl"),
+        mtproto_list_urls=config["mtproto_list_urls"],
         on_sources_changed=lambda urls: persist_active_urls(config, urls),
         known_good_enabled=config["known_good_enabled"],
     )

@@ -960,9 +960,13 @@ class ProxyManager:
     def __init__(self, proxy_list_urls=None, max_tg_latency_ms=TG_LATENCY_LIMIT_MS,
                  known_good_path=None, source_health_path=None, known_bad_path=None,
                  on_sources_changed=None, known_good_enabled=True, _clock=None,
-                 rounds_path=None):
+                 rounds_path=None, mtproto_list_urls=None):
         self._lock = threading.RLock()  # 可重入：体检全程持锁，内部再取锁不致死锁
         self._proxy_list_urls = list(proxy_list_urls or DEFAULT_PROXY_LIST_URLS)
+        # MTProto 专用源：默认空。与普通源共用同一条抓取流水线（解析器本来就能
+        # 从任意文本里同时认出 socks5:// 与 t.me/proxy），分开跑只会多一套进度、
+        # 体检和失败处理。空列表 = 用户没配，界面据此显示「未配置」而不是「0 个通过」。
+        self._mtproto_list_urls = [str(u) for u in (mtproto_list_urls or []) if u]
         self._max_tg_latency_ms = max_tg_latency_ms
         self._known_good_path = known_good_path
         self._known_good_enabled = bool(known_good_enabled)
@@ -1024,6 +1028,19 @@ class ProxyManager:
             if changed:
                 self._save_source_health(health)
 
+    def _all_source_urls(self):
+        """本轮要抓的源：普通源 + MTProto 专用源（按出现顺序去重后截断）。"""
+        urls = list(self._proxy_list_urls)
+        for extra in self._mtproto_list_urls:
+            if extra not in urls:
+                urls.append(extra)
+        return urls[:FETCH_MAX_SOURCES]
+
+    def set_mtproto_list_urls(self, urls):
+        """热更新 MTProto 专用源（下次刷新生效）。空列表表示「未配置」。"""
+        with self._lock:
+            self._mtproto_list_urls = [str(u) for u in (urls or []) if u]
+
     def set_known_good_enabled(self, enabled):
         """热更新 known_good 沉淀开关（下次刷新生效）：关闭后不再读取或写入
         known_good.json（已有文件保留不动，重新开启后恢复使用）。"""
@@ -1056,6 +1073,9 @@ class ProxyManager:
                 "stage_durations": dict(self._stage_durations),
                 "tg_gate_stats": dict(self._tg_gate_stats),
                 "mtproto_gate_stats": dict(self._mtproto_gate_stats),
+                # 区分「没配 MTProto 源」与「配了但这轮没有候选」：
+                # 只看 in_pool=0 的话，这两种情况长得一样
+                "mtproto_configured": bool(self._mtproto_list_urls),
                 "fetch_meta": dict(self._fetch_meta),
                 "progress": dict(self._live_progress),
                 "sources": [dict(item) for item in self._sources],
@@ -1169,7 +1189,7 @@ class ProxyManager:
         round_started = time.perf_counter()
         stages = {}
 
-        urls = list(self._proxy_list_urls)[:FETCH_MAX_SOURCES]
+        urls = self._all_source_urls()
         sources = []
         t_stage = time.perf_counter()
         self._set_progress("fetch", 0, len(urls))
