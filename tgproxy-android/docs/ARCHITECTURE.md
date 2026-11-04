@@ -51,8 +51,9 @@
 > 2. **单源镜像竞速**：新增 `data/MirrorRace.kt`（纯协程：错峰 `index×250ms` → 首个通过校验的候选胜出 → 取消其余 → 全部失败时错误带各自原因）。`ProxyFetcher.fetch` 由「顺序回退」改为 `race`。
 > 3. **取消语义（关键技术点）**：候选抓取用 `suspendCancellableCoroutine` + OkHttp `enqueue`，`invokeOnCancellation → call.cancel()`。`execute()` 是阻塞调用、协程取消打断不了，落败候选会把 11.9 MB 列表下完。
 > 4. **并发宽度（有意偏离桌面）**：`Constants.FETCH_RACE_MAX = 8`（桌面 64）。20 源 × 4 候选峰值 80 条连接，手机上会发烫；`MirrorRace` 的 Semaphore 是实例字段（`ProxyFetcher` 单例），跨源共享该上限。**这是刻意取舍，不是 bug。**
-> 5. **不迁移**：桌面 `Age`/freshness 面板与 `via_mirror` 胜负上报**这一版不做**（安卓无源面板）；64 字节下限只属于「单个响应完整性」，不作用于「多源合并」层。
-> 6. **测试**：新增 `MirrorRaceTest`（5 例，快者先到/空体被拒/全败带原因/落败取消/错峰虚拟时间）与 `ProxyFetcherTest`（6 例，min_bytes + validator + call.cancel 透传）；变异自检新增 4 条（去 min_bytes / 去 validator / 改成顺序 / 去 stagger）→ 11/11 CAUGHT。
+> 5. **最坏情况两个方向（必须一起看）**：源内顺序、源间并发（旧）最坏 = 4×超时 = 60s。竞速后默认 5 源（20 候选）最坏 = ⌈20/8⌉×8s = 24s ✅；配满 20 源（80 候选）最坏 = ⌈80/8⌉×8s = **80s** ❌。所以「变快」只在默认配置成立。为压掉这个反方向，`FETCH_TIMEOUT_MS` 由 15s 对齐桌面总预算 8s（原 15s 会让 20 源最坏拉到 150s）—— 一个数、收益最大，且两端抓取超时对齐。
+> 6. **不迁移**：桌面 `Age`/freshness 面板与 `via_mirror` 胜负上报**这一版不做**（安卓无源面板）；64 字节下限只属于「单个响应完整性」，不作用于「多源合并」层。
+> 7. **测试**：新增 `MirrorRaceTest`（5 例，快者先到/空体被拒/全败带原因/落败取消/错峰虚拟时间）与 `ProxyFetcherTest`（6 例，min_bytes + validator + call.cancel 透传）；变异自检新增 4 条（去 min_bytes / 去 validator / 改成顺序 / 去 stagger）→ 11/11 CAUGHT。
 
 ---
 
