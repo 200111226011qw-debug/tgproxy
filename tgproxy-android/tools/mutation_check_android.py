@@ -91,6 +91,13 @@ MUTATIONS = [
         "TgVerdict.FAIL\n            else -> TgVerdict.FAIL",
         "com.tgproxy.ProxyRepositoryMtProtoTest",
     ),
+    Mutation(
+        "解析器不把 secret 放进条目（退回双解析）",
+        "app/src/main/java/com/tgproxy/data/ProxyParser.kt",
+        "secret = parsed.secret,",
+        "secret = null,",
+        "com.tgproxy.ProxyParserTest",
+    ),
 ]
 
 

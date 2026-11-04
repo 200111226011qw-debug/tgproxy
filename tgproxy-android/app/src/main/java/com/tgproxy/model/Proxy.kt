@@ -26,6 +26,8 @@ enum class TgVerdict { PASS, FAIL, UNVERIFIED }
  * @property location 地区（元数据）
  * @property isp ISP（元数据）
  * @property addedAt 入库时间（元数据，形态 `MM-dd HH:mm`）
+ * @property secret MTProto 的 secret（已 URL 解码，仅在 type=MTPROTO 时非空）。
+ *   从 link 反解会被解析两次且可能漏解码，故解析阶段解好放这里，实测阶段直接取用。
  */
 data class ProxyEntry(
     val link: String,
@@ -38,6 +40,7 @@ data class ProxyEntry(
     val location: String = "",
     val isp: String = "",
     val addedAt: String = "",
+    val secret: String? = null,
 )
 
 /**

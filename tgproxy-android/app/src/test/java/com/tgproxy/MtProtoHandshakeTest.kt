@@ -199,19 +199,6 @@ class MtProtoHandshakeTest {
         )
     }
 
-    @Test
-    fun `从分享链接取 secret`() {
-        assertEquals(
-            "dd0123",
-            MtProtoHandshake.secretFromLink("tg://proxy?server=1.2.3.4&port=443&secret=dd0123"),
-        )
-        assertEquals(
-            "dd0456",
-            MtProtoHandshake.secretFromLink("https://t.me/proxy?server=1.2.3.4&port=443&secret=dd0456"),
-        )
-        assertNull(MtProtoHandshake.secretFromLink("tg://proxy?server=1.2.3.4&port=443"))
-        assertNull(MtProtoHandshake.secretFromLink("socks5://1.2.3.4:1080"))
-    }
 
     // -----------------------------------------------------------------------
 

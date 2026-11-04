@@ -254,23 +254,6 @@ object MtProtoHandshake {
         throw SecretException(SecretError.BAD, "base64 secret 解码为 ${raw.size} 字节，期望至少 16")
     }
 
-    /**
-     * 从分享链接里取 `secret` 参数（`tg://proxy?...` / `https://t.me/proxy?...`）。
-     *
-     * 只做取值，不做校验：非法内容留给 [parseSecret] 报具体原因。
-     */
-    fun secretFromLink(link: String): String? {
-        val queryStart = link.indexOf('?')
-        if (queryStart < 0) return null
-        for (pair in link.substring(queryStart + 1).split('&')) {
-            val eq = pair.indexOf('=')
-            if (eq <= 0) continue
-            if (pair.substring(0, eq) != "secret") continue
-            return pair.substring(eq + 1)
-        }
-        return null
-    }
-
     /** hex 解析：奇数长度或含非 hex 字符返回 null（等价 Python `bytes.fromhex` 的失败语义）。 */
     private fun hexOrNull(text: String): ByteArray? {
         if (text.isEmpty() || text.length % 2 != 0) return null

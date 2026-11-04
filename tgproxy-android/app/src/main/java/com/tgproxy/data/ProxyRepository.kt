@@ -276,9 +276,10 @@ class ProxyRepository(
      * - **MTProto**：直连节点做 obfuscated2 握手 + `req_pq_multi`，校验 resPQ 是否回显
      *   我们发出的 nonce（见 [MtProtoProbe]）。它自己就是代理，没有外层隧道。
      *
-     * 两类都计入 TG 进度。**无法判定**的（链接里没 secret、`ee`/FakeTLS 未实现）
-     * 保持 UNVERIFIED 且不计失败 —— 否则用户写错 secret 的节点会被连败拉黑，
-     * 把配置问题算成节点问题。
+     * 两类都计入 TG 进度。**无法判定**的（链接里没有 secret、`ee`/FakeTLS 未实现）
+     * 保持 UNVERIFIED 且不计失败 —— 这不是节点的错（没给 secret / 我们还没实现
+     * 这种格式），算失败会把节点连败拉黑。注意「secret 存在但格式非法」仍计 FAIL
+     * （与桌面版一致），不在「无法判定」之列。
      *
      * [TgGateStats] 仍然只统计 SOCKS5 两关：它的四个桶（dcFail/webFail/...）
      * 是隧道语义，MTProto 没有这些关卡，混进去会让漏斗撒谎。
@@ -357,7 +358,9 @@ class ProxyRepository(
 
     /** MTProto 单节点真校验（握手成功即带上 RTT；无法判定的保持未验证）。 */
     private fun mtProtoEntry(entry: ProxyEntry): ProxyEntry {
-        val secret = MtProtoHandshake.secretFromLink(entry.link)
+        // secret 在解析阶段已 URL 解码并放进 entry —— 这里不再从 link 反解，
+        // 避免「同一个字段被两个解析器读、且解码不一致」。
+        val secret = entry.secret
         val result = try {
             mtProtoProbe.probe(
                 entry.host,

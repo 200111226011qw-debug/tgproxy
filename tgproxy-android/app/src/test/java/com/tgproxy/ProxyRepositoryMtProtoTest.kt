@@ -165,6 +165,21 @@ class ProxyRepositoryMtProtoTest {
     }
 
     @Test
+    fun `百分号编码的 secret 解析后透传给探针`() {
+        val td = StandardTestDispatcher()
+        runTest(td) {
+            val probe = HostProbe(mapOf("5.6.7.8" to MtProtoResult(MtProtoCode.OK, latencyMs = 90)))
+            val link = "tg://proxy?server=5.6.7.8&port=443&secret=MDEyMzQ1Njc4OWFiY2RlZg%3D%3D"
+            val repo = ProxyRepository(FakeSource(link), AllPassTester(), NeverGate(), ioDispatcher = td, mtProtoProbe = probe)
+
+            repo.refresh(listOf("u"))
+
+            // 解析阶段已把 %3D%3D 解回 ==，探针收到的是解码后的 secret，而非原文
+            assertEquals(listOf("MDEyMzQ1Njc4OWFiY2RlZg=="), probe.seenSecrets)
+        }
+    }
+
+    @Test
     fun `TG 进度分母包含 MTProto（不再只报 SOCKS5）`() {
         val td = StandardTestDispatcher()
         runTest(td) {

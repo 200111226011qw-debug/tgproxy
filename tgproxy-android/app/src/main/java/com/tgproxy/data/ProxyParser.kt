@@ -26,7 +26,13 @@ class ProxyParser {
     )
 
     /** MTProto 链接中提取出的关键信息。 */
-    private data class MtprotoInfo(val link: String, val host: String, val port: Int)
+    private data class MtprotoInfo(
+        val link: String,
+        val host: String,
+        val port: Int,
+        /** 已 URL 解码的 secret（parseQuery 里解过，这里直接带上，实测阶段不再反解）。 */
+        val secret: String,
+    )
 
     /** 行尾元数据。 */
     private data class Meta(val addedAt: String, val location: String, val isp: String)
@@ -105,6 +111,7 @@ class ProxyParser {
                         location = meta.location,
                         isp = meta.isp,
                         addedAt = meta.addedAt,
+                        secret = parsed.secret,
                     ),
                 )
                 continue
@@ -243,7 +250,7 @@ class ProxyParser {
         val host = parseIpv4(server)
         val port = parsePort(portText)
         if (host == null || port == null || secret.isEmpty()) return null
-        return MtprotoInfo(link = "$scheme://$rest", host = host, port = port)
+        return MtprotoInfo(link = "$scheme://$rest", host = host, port = port, secret = secret)
     }
 
     /** 取 `?` 之后、`#` 之前的 query 段（近似 urlparse 的 query 切分）。 */

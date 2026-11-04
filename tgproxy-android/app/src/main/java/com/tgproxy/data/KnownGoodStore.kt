@@ -66,14 +66,19 @@ class KnownGoodStore(private val file: File?) {
         }
     }
 
-    private fun entryToJson(entry: ProxyEntry): JSONObject = JSONObject()
-        .put("link", entry.link)
-        .put("host", entry.host)
-        .put("port", entry.port)
-        .put("type", entry.type.name)
-        .put("location", entry.location)
-        .put("isp", entry.isp)
-        .put("added_at", entry.addedAt)
+    private fun entryToJson(entry: ProxyEntry): JSONObject {
+        val obj = JSONObject()
+            .put("link", entry.link)
+            .put("host", entry.host)
+            .put("port", entry.port)
+            .put("type", entry.type.name)
+            .put("location", entry.location)
+            .put("isp", entry.isp)
+            .put("added_at", entry.addedAt)
+        // MTProto 的 secret 必须跟着落盘：否则下轮恢复后 secret 丢失 → 判「未验证」→ 丢节点
+        if (entry.secret != null) obj.put("secret", entry.secret)
+        return obj
+    }
 
     private fun entryFromJson(obj: JSONObject): ProxyEntry? {
         val link = obj.optString("link")
@@ -97,6 +102,7 @@ class KnownGoodStore(private val file: File?) {
             location = obj.optString("location"),
             isp = obj.optString("isp"),
             addedAt = obj.optString("added_at"),
+            secret = obj.optString("secret").takeIf { it.isNotEmpty() },
         )
     }
 

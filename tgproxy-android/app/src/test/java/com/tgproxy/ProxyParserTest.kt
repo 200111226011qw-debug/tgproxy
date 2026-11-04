@@ -56,6 +56,16 @@ class ProxyParserTest {
     }
 
     @Test
+    fun `MTProto 的 secret 解析后放进条目且已 URL 解码`() {
+        val link = "tg://proxy?server=5.6.7.8&port=443&secret=MDEyMzQ1Njc4OWFiY2RlZg%3D%3D"
+        val result = parser.parse(link)
+
+        val entry = result.entries[0]
+        assertEquals("MDEyMzQ1Njc4OWFiY2RlZg==", entry.secret)
+        assertEquals(link, entry.link)
+    }
+
+    @Test
     fun `https t me 与 www t me 的 proxy 链接识别为 MTProto`() {
         val text = "https://t.me/proxy?server=1.1.1.1&port=443&secret=aa\n" +
             "https://www.t.me/proxy?server=2.2.2.2&port=443&secret=bb"
