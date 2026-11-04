@@ -6,8 +6,10 @@
 「配置了但没候选」必须可区分。
 """
 
+import json
 import os
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
@@ -217,6 +219,68 @@ def test_validate_dedupes_and_caps():
     too_many = ["https://e.com/%d.txt" % i for i in range(app.MAX_PROXY_LIST_URLS + 1)]
     got, err = app.validate_mtproto_list_urls(too_many)
     assert got is None and "最多" in err
+
+
+# ---------------------------------------------------------------------------
+# 源被停用后的宽恕：普通源有，MTProto 源也必须有
+
+
+def _health_fixture(entries):
+    tmp = tempfile.mkdtemp(prefix="tghealth-")
+    path = os.path.join(tmp, "source_health.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(entries, fh)
+    return path
+
+
+def _read_health(path):
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def test_mtproto_setter_forgives_parked_source():
+    """改好一个被停用的 MTProto 源之后，它必须被重新观察。
+
+    否则源一直 parked → 不会被抓 → in_pool 恒为 0，而界面只显示
+    「已配置 · 无候选」，看不出真正原因是源被停用了。
+    """
+    mt = "https://m.com/mt.txt"
+    path = _health_fixture({mt: {"hist": [0, 0, 0], "fails": 5,
+                                 "parked": "连续 5 轮抓取失败"}})
+    mgr = pm.ProxyManager(proxy_list_urls=["https://p.com/p.txt"], source_health_path=path)
+
+    mgr.set_mtproto_list_urls([mt])
+
+    assert _read_health(path)[mt] == {"hist": [], "fails": 0, "parked": None}
+
+
+def test_mtproto_setter_leaves_unchanged_sources_alone():
+    """只宽恕本次新增的 URL；已存在的源其健康历史不能被顺手清掉。"""
+    keep = "https://m.com/keep.txt"
+    add = "https://m.com/add.txt"
+    path = _health_fixture({
+        keep: {"hist": [1, 2], "fails": 2, "parked": None},
+        add: {"hist": [0], "fails": 1, "parked": None},
+    })
+    mgr = pm.ProxyManager(proxy_list_urls=["https://p.com/p.txt"],
+                          mtproto_list_urls=[keep], source_health_path=path)
+
+    mgr.set_mtproto_list_urls([keep, add])
+
+    health = _read_health(path)
+    assert health[keep] == {"hist": [1, 2], "fails": 2, "parked": None}
+    assert health[add] == {"hist": [], "fails": 0, "parked": None}
+
+
+def test_proxy_setter_still_forgives_after_refactor():
+    """宽恕逻辑抽成 _forgive_added_urls 之后，普通源的行为不能变。"""
+    url = "https://p.com/new.txt"
+    path = _health_fixture({url: {"hist": [0], "fails": 3, "parked": "x"}})
+    mgr = pm.ProxyManager(proxy_list_urls=["https://p.com/old.txt"], source_health_path=path)
+
+    mgr.set_proxy_list_urls(["https://p.com/old.txt", url])
+
+    assert _read_health(path)[url] == {"hist": [], "fails": 0, "parked": None}
 
 
 if __name__ == "__main__":
