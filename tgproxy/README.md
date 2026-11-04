@@ -40,11 +40,14 @@ pip install -r requirements.txt    # 仅 cryptography
 ## 测试
 
 ```bash
-pip install -r requirements.txt    # 必装，否则 MTProto 相关 25 个用例会失败
-python -m pytest tests -q          # 期望 190 passed
+pip install -r requirements.txt    # 必装，否则 MTProto 相关用例会失败
+python -m pytest tests -q          # 期望全绿
 ```
 
-裸环境（没装 `cryptography` / `pycryptodome`）直接跑是 `25 failed, 165 passed`，失败原因统一是
+这里刻意不写通过数：它会随用例增加而变化，写死必然过期，而过期的数字会让人误判成
+「环境有问题」。数字由 pytest 自己打印。
+
+裸环境（没装 `cryptography` / `pycryptodome`）直接跑，会有一批用例失败，原因统一是
 `MtprotoError: 缺少 AES 实现`。**这是有意的硬失败，不是漏了 skip**：产品侧缺库时安静降级没问题，
 但测试侧如果 skip，CI 上会长期绿着却没人发现「真校验其实一次都没跑过」。装上就全绿。
 
@@ -53,6 +56,28 @@ python -m pytest tests -q          # 期望 190 passed
 ```bash
 python tests/test_aes_backend_race.py    # 期望 3 行 PASS
 ```
+
+### 变异自检（改动关键接线后跑一次）
+
+```bash
+python tools/mutation_check.py --list   # 看清单
+python tools/mutation_check.py          # 逐项注入错实现，确认测试会红
+```
+
+它把实现改成错的，要求指定测试变红。四种结果分开报告：
+
+| 结果 | 含义 |
+|---|---|
+| `CAUGHT` | 注入成功 + 目标测试出现在 FAILED 行 —— 通过 |
+| `NOT_CAUGHT` | 注入成功但测试仍绿 —— **覆盖不足，必须修** |
+| `INJECT_FAILED` | 锚点不匹配 —— 代码变了，`MUTATIONS` 要更新 |
+| `WRONG_FAILURE` | 红了，但不是目标测试 —— 多半是语法被打坏，别当成通过 |
+
+后两种单独区分是关键：锚点失配若当成「没抓到」会误判成覆盖不足，若当成「通过」就是静默假绿。
+每项跑完用**字节**恢复并校验 SHA-256，任何一次恢复失败都会中止。
+
+清单里有一条 `[自检] 改一句注释`，期望 `NOT_CAUGHT`：如果它被报成 `CAUGHT`，
+说明判定逻辑在瞎报。
 
 ## 启用 MTProto 真校验（可选）
 
