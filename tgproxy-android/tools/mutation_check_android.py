@@ -98,6 +98,34 @@ MUTATIONS = [
         "secret = null,",
         "com.tgproxy.ProxyParserTest",
     ),
+    Mutation(
+        "去 min_bytes（空体当成功）",
+        "app/src/main/java/com/tgproxy/data/ProxyFetcher.kt",
+        "if (bytes.size < minBytes) {",
+        "if (false && bytes.size < minBytes) {",
+        "com.tgproxy.ProxyFetcherTest",
+    ),
+    Mutation(
+        "去 validator（纯注释当成功）",
+        "app/src/main/java/com/tgproxy/data/ProxyFetcher.kt",
+        "if (!hasUsableLine(bytes.toString(Charsets.UTF_8))) {",
+        "if (false && !hasUsableLine(bytes.toString(Charsets.UTF_8))) {",
+        "com.tgproxy.ProxyFetcherTest",
+    ),
+    Mutation(
+        "改成顺序（只试直连，镜像不再兜底）",
+        "app/src/main/java/com/tgproxy/data/MirrorRace.kt",
+        "val jobs = candidates.mapIndexed { index, candidate ->",
+        "val jobs = candidates.take(1).mapIndexed { index, candidate ->",
+        "com.tgproxy.MirrorRaceTest",
+    ),
+    Mutation(
+        "去 stagger（错峰失效）",
+        "app/src/main/java/com/tgproxy/data/MirrorRace.kt",
+        "if (index > 0 && staggerMs > 0) delay(index * staggerMs)",
+        "if (false) delay(index * staggerMs)",
+        "com.tgproxy.MirrorRaceTest",
+    ),
 ]
 
 

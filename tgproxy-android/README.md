@@ -10,6 +10,8 @@
 
 与桌面版一致：内置 5 个免费代理源（hideip.me / proxyscrape / monosans / TheSpeedX / watchttvv，2026-10-25 统一体检精选）并发抓取、按 host:port 去重合并；raw.githubusercontent.com 直连失败自动回退 jsDelivr 镜像（cdn / gcore / fastly）；支持裸 `host:port` 行格式；单源 >1000 条、合并 >3000 条随机抽样；设置中的自定义数据源会追加到内置源之后。
 
+单个源内部为**镜像竞速**（v2.4.0）：直连 + 3 个 jsDelivr 镜像错峰并发（250ms 间隔），首个通过完整性校验（≥64 字节且含至少一条非注释行）的候选胜出、其余 `call.cancel()` 取消，避免落败候选继续把整份列表下完；全局候选并发上限 8（有意低于桌面，避免手机发烫）。
+
 ## 构建与运行
 
 ### 方式一：Android Studio（推荐）
@@ -245,7 +247,7 @@ tgproxy-android/
 
 ## 测试
 
-`app/src/test/java/com/tgproxy/` 下 18 个 JVM 单测类对拍桌面版行为（debug 单变体 161 例全绿；debug+release 共 322 例）：
+`app/src/test/java/com/tgproxy/` 下 20 个 JVM 单测类对拍桌面版行为（debug 单变体 172 例全绿；debug+release 共 344 例）：
 
 | 测试类 | 覆盖 |
 |---|---|
@@ -269,7 +271,7 @@ tgproxy-android/
 python tools/mutation_check_android.py
 ```
 
-对 7 处关键实现做「改成相反的」注入（反向切片改顺序、init 尾改明文、去掉 nonce 校验、dd 错位、通过记失败、无法判定记失败），要求目标测试**变红**；每条跑完按字节恢复并校验 SHA-256。判定分四种：
+对 11 处关键实现做「改成相反的」注入（协议反向切片、init 尾改明文、去 nonce 校验、dd 错位、通过记失败、无法判定记失败、secret 双解析、去 min_bytes、去 validator、改成顺序、去 stagger），要求目标测试**变红**；每条跑完按字节恢复并校验 SHA-256。判定分四种：
 
 | 结果 | 含义 |
 |---|---|
