@@ -31,6 +31,15 @@ object Constants {
     /** 同时抓取的数据源上限，等价桌面版 FETCH_MAX_SOURCES=8 */
     const val FETCH_MAX_SOURCES = 8
 
+    /** 单个候选响应可用的最小字节数（等价桌面版 MIN_BYTES=64）：低于它按「截断/缓存穿透」判失败 */
+    const val FETCH_MIN_BYTES = 64
+
+    /** 单源镜像竞速的错峰间隔（等价桌面版 DEFAULT_STAGGER_MS=250） */
+    const val FETCH_RACE_STAGGER_MS = 250L
+
+    /** 镜像竞速的全局候选并发上限：有意偏离桌面（桌面 64），手机 8 条同时抓，避免发烫 */
+    const val FETCH_RACE_MAX = 8
+
     /** 单源解析条目抽样上限，等价桌面版 MAX_PER_SOURCE=1000 */
     const val MAX_PER_SOURCE = 1000
 
