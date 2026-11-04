@@ -321,6 +321,7 @@
       <div class="kv"><span class="k">上轮耗时</span><span class="num" id="side-duration">—</span></div>
       <div class="kv"><span class="k">本轮测数</span><span class="num" id="side-tested">—</span></div>
       <div class="kv"><span class="k">更新时间</span><span class="num" id="side-updated">—</span></div>
+      <div class="kv"><span class="k">列表新鲜度</span><span class="num" id="side-fetch-age">—</span></div>
     </div>
 
     <div class="spacer"></div>
@@ -495,6 +496,26 @@
   }
 
   /* ---------- 左栏 / Hero ---------- */
+  /* 列表新鲜度：jsDelivr 的 s-maxage 是 12 小时，而刷新间隔默认 10 分钟。
+     所以完全可能「界面刚从刷新完」，用的却是半天前的列表。这里如实显示
+     这份列表在 CDN 里躺了多久，不假装是刚抓的。 */
+  function renderFetchAge(data, updated) {
+    var el = $("side-fetch-age");
+    if (!el) return;
+    var fm = data.fetch_meta || {};
+    if (!updated) { el.textContent = "—"; el.title = ""; return; }
+    if (fm.age_seconds === null || fm.age_seconds === undefined) {
+      el.textContent = fm.via_mirror_sources ? "镜像" : "直连";
+      el.title = "该源未返回缓存年龄（Age 头），无法判断新鲜度";
+      return;
+    }
+    var mins = Math.round((fm.age_seconds || 0) / 60);
+    el.textContent = (fm.stale ? "⚠ " : "") + (mins >= 1 ? mins + " 分钟前" : "刚刚");
+    el.title = fm.stale
+      ? "列表来自镜像缓存，已超过 " + Math.round((fm.stale_after_sec || 900) / 60) + " 分钟，不是实时数据"
+      : "列表数据的新鲜度";
+  }
+
   function renderSummary(data) {
     var stats = data.stats || {};
     var tested = (stats.available || 0) + (stats.unverified || 0) +
@@ -509,6 +530,7 @@
     $("side-duration").textContent = fmtDuration(dur);
     $("side-tested").textContent = updated ? tested : "—";
     $("side-updated").textContent = updated || "—";
+    renderFetchAge(data, updated);
 
     $("hero-available").textContent = updated ? (stats.available || 0) : "—";
     $("hero-tested").textContent = updated ? tested : "—";
