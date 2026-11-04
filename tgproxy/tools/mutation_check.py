@@ -103,6 +103,15 @@ MUTATIONS = [
         "tests": ["tests/test_mtproto_source.py"],
     },
     {
+        "name": "ee 短路失效（FakeTLS 拿 16 字节当 dd 硬连）",
+        "file": "mtproto_handshake.py",
+        "find": 'if parsed.kind == \"ee\":',
+        "replace": 'if False and parsed.kind == \"ee\":',
+        "tests": [
+            "tests/test_mtproto_handshake.py::test_check_mtproto_proxy_faketls_short_circuits_without_connect"
+        ],
+    },
+    {
         "name": "in_pool 忽略传入值（无法区分「没候选」与「全被刷掉」）",
         "file": "proxy_manager.py",
         "find": '"in_pool": int(len(mtproto_indices) if in_pool is None else in_pool),',

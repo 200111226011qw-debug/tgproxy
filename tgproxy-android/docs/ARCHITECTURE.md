@@ -42,7 +42,7 @@
 > 2. **为什么要改**：原第一关只做 SOCKS5 CONNECT 到 DC 的 TCP 往返，「端口开着」就算过；透明代理 / 劫持设备 / 随便一个 acceptance server 都能满足。真握手的判据是「对端回了带我们随机 nonce 的 `resPQ`（constructor `0x05162463`）」，假节点伪造不出。
 > 3. **结论三态不变，语义收紧**：`PASS`（握手成功 + RTT）/ `FAIL`（超时、协议错、假节点）/ `UNVERIFIED`（缺 secret、`ee`/FakeTLS 未实现）。`UNVERIFIED` **不计失败**：否则 secret 写错会让节点三轮后被连败拉黑，配置问题被记成节点问题。`TgGateStats` 仍只统计 SOCKS5 两关（MTProto 没有隧道关卡，混入会让漏斗撒谎）。
 > 4. **预算**：`Constants.mtprotoBudgetMs() = max(2000, 门槛+1000)`，与桌面版 `mtproto_budget_for` 同源 —— 预算必须 ≥ 门槛 + 余量，否则「本可过门槛」的节点会被预算砍成「失败」而不是「太慢」。
-> 5. **测试**：新增 `MtProtoHandshakeTest`（17 例，含桌面版黄金向量与 secret 七分支）、`MtProtoProbeTest`（11 例，假服务端按协议回包）、`ProxyRepositoryMtProtoTest`（7 例，结论落账）；`ProxyRepositoryTest` 的 MTProto 用例改为「ee → 未验证 + 探针确实被调用」。18 类 160 例 × 双变体 = 320 全绿；`tools/mutation_check_android.py` 6 条变异全部 CAUGHT。
+> 5. **测试**：新增 `MtProtoHandshakeTest`（17 例，含桌面版黄金向量与 secret 七分支）、`MtProtoProbeTest`（11 例，假服务端按协议回包）、`ProxyRepositoryMtProtoTest`（7 例，结论落账）；`ProxyRepositoryTest` 的 MTProto 用例改为「ee → 未验证 + 探针确实被调用」。18 类 161 例 × 双变体 = 322 全绿；`tools/mutation_check_android.py` 7 条变异全部 CAUGHT。
 > 6. **版本**：versionCode 13 / versionName 2.3.0。
 
 ---

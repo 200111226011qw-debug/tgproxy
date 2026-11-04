@@ -949,7 +949,7 @@ def _check_mtproto_entry(entry, budget):
     )
     if result.ok:
         return True, result.rtt_ms, "OK"
-    if result.error_code == "CRYPTO_UNAVAILABLE":
+    if result.error_code in ("CRYPTO_UNAVAILABLE", "FAKETLS_UNSUPPORTED"):
         return None, None, result.error_code
     return False, None, (result.error_code or "UNKNOWN")
 

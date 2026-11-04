@@ -164,6 +164,11 @@ async def _check_parsed_async(
 ) -> CheckResult:
     kind = parsed.kind
 
+    if kind == "ee":
+        # FakeTLS 未实现：与同步版同一口径 —— 无法判定，不计失败。
+        return _invalid(host, 0, kind, dc_id, ErrorCode.FAKETLS_UNSUPPORTED,
+                        "ee/FakeTLS 未实现，无法判定（不计失败）")
+
     if not host:
         return _invalid(host, 0, kind, dc_id, ErrorCode.INVALID_INPUT, "host 为空")
 
