@@ -20,7 +20,7 @@ sequenceDiagram
     VM->>VM: refresh() → tryLock 成功
     VM->>U: uiState：fetching=true, error=null
     VM->>R: refresh(proxyListUrl)
-    R->>F: fetch(url)（OkHttp，connect/read 15s，UA 固定）
+    R->>F: fetch(url)（OkHttp，connect/read/call 8s，UA 固定）
     F-->>R: proxy.txt 文本
     R->>P: parse(text)
     P-->>R: ParseResult(entries, excludedCount, droppedCount)

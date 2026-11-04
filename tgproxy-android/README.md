@@ -233,7 +233,7 @@ tgproxy-android/
 | 桌面版 | 安卓版 | 说明 |
 |---|---|---|
 | `proxy_manager.parse_proxy_text` | `data/ProxyParser.kt` | 逐行为等价移植（IPv4/端口校验、host:port 去重、excluded/dropped 计数、元数据提取） |
-| `proxy_manager.fetch_proxy_text` | `data/ProxyFetcher.kt` | OkHttp，15s 超时，UA 一致；SSL 免验证兜底不移植（安卓走系统 CA Store） |
+| `proxy_manager.fetch_proxy_text` | `data/ProxyFetcher.kt` | OkHttp，8s 超时（callTimeout 硬上限），UA 一致；SSL 免验证兜底不移植（安卓走系统 CA Store） |
 | `proxy_manager.test_tcp_latency` + ThreadPoolExecutor(150) | `data/ProxyTester.kt` | TCP 预筛：`java.net.Socket` + `Semaphore(128)`，5s 超时，保序，逐条进度上报 |
 | `proxy_manager._socks5_connect` / `test_telegram_via_socks5` / `test_telegram_web_via_socks5` | `data/TelegramGate.kt` | SOCKS5 握手字节序逐项一致（05 01 00 / ATYP 1·3·4 / 状态行校验）；两关串行共享 20s 总预算，单关 8s；并发 96 |
 | `known_good.json` 读/写/合并 + 开关 | `data/KnownGoodStore.kt` | 应用私有目录 known_good.json；开关关闭不读不写；延迟/状态不落盘（下轮一律重测） |

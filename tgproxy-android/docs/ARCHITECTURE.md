@@ -85,7 +85,7 @@
 | androidx.activity | **activity-compose 1.9.3** | `ComponentActivity` + `setContent` |
 | androidx.lifecycle | **2.8.7**（lifecycle-runtime-compose / lifecycle-viewmodel-compose） | `collectAsStateWithLifecycle()`、`viewModels()` |
 | androidx.navigation | **navigation-compose 2.8.3** | PRD 5.3 要求预留 Navigation Compose（本期单目的地） |
-| com.squareup.okhttp3 | **okhttp 4.12.0** | 同步 `execute()` 包 `withContext(Dispatchers.IO)`，等价桌面版 `urllib.urlopen`；UA 与 15s 超时可精确复刻 |
+| com.squareup.okhttp3 | **okhttp 4.12.0** | 同步 `execute()` 包 `withContext(Dispatchers.IO)`，等价桌面版 `urllib.urlopen`；UA 一致、8s 超时（有意紧于桌面 15s，非「对齐」） |
 | androidx.datastore | **datastore-preferences 1.1.1** | PRD 规定的配置持久化（键 `interval_minutes` / `proxy_list_url`，新增 `theme_mode` 见 §5） |
 | org.jetbrains.kotlinx | **kotlinx-coroutines 1.9.0**（含 coroutines-test） | 倒计时循环、并发测试、`StateFlow`、JVM 单测 `runTest` |
 | junit | **4.13.2** | JVM 单测对拍桌面版 |
@@ -124,7 +124,7 @@
 
 | # | 桌面版行为 | 安卓实现位置 | 单测覆盖（T03） |
 |---|---|---|---|
-| F1 | 抓取超时 15s | `Constants.FETCH_TIMEOUT_MS` → OkHttp connect/read timeout | —（集成验证） |
+| F1 | 抓取超时 8s | `Constants.FETCH_TIMEOUT_MS` → OkHttp connect/read timeout | —（集成验证） |
 | F2 | UA `tgproxy/1.0 (local Telegram proxy manager)` | `ProxyFetcher` header | — |
 | F3 | IPv4 严格校验（4 段纯数字 0-255，含 X 掩码丢弃） | `ProxyParser.parseIpv4` | ProxyParserTest 用例 8/9 |
 | F4 | 端口 1~65535 | `ProxyParser.parsePort` | ProxyParserTest 用例 9 |
@@ -176,7 +176,7 @@ tgproxy-android/
         │   │   │   ├── Settings.kt             # ThemeMode + Settings + normalize*/parseIntervalInput 纯函数
         │   │   │   └── ProxyUiState.kt         # UI 状态快照（PRD 5.4）
         │   │   ├── data/
-        │   │   │   ├── ProxyFetcher.kt         # fun interface ProxySource + OkHttp 实现（15s 超时/UA）
+        │   │   │   ├── ProxyFetcher.kt         # fun interface ProxySource + OkHttp 实现（8s 超时/UA）
         │   │   │   ├── ProxyParser.kt          # 桌面版 parse_proxy_text 等价移植（纯 Kotlin）
         │   │   │   ├── ProxyTester.kt          # fun interface LatencyTester + Socket/Semaphore(20) 实现
         │   │   │   ├── ProxyRepository.kt      # 编排刷新管线 + 排序比较器 + RefreshResult
@@ -479,7 +479,7 @@ data class ProxyUiState(
 fun interface ProxySource { suspend fun fetch(url: String): String }
 class ProxyFetcher(private val client: OkHttpClient = defaultClient()) : ProxySource {
     override suspend fun fetch(url: String): String     // withContext(IO)；非 2xx 抛 IOException("HTTP {code}")
-    companion object { fun defaultClient(): OkHttpClient }  // connect/read timeout 均 15s，UA 固定
+    companion object { fun defaultClient(): OkHttpClient }  // connect/read/call timeout 均 8s，UA 固定
 }
 
 // data/ProxyParser.kt  —— parse_proxy_text 逐字等价移植
@@ -607,7 +607,7 @@ sequenceDiagram
     VM->>VM: refresh() → tryLock 成功
     VM->>U: uiState：fetching=true, error=null
     VM->>R: refresh(proxyListUrl)
-    R->>F: fetch(url)（OkHttp，connect/read 15s，UA 固定）
+    R->>F: fetch(url)（OkHttp，connect/read/call 8s，UA 固定）
     F-->>R: proxy.txt 文本
     R->>P: parse(text)
     P-->>R: ParseResult(entries, excludedCount, droppedCount)
@@ -928,7 +928,7 @@ kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "ko
 ```
 DEFAULT_PROXY_LIST_URL = "https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt"
 USER_AGENT              = "tgproxy/1.0 (local Telegram proxy manager)"
-FETCH_TIMEOUT_MS        = 15_000L      // OkHttp connect/read 均为此值
+FETCH_TIMEOUT_MS        = 8_000L       // OkHttp connect/read/call 均为此值（callTimeout 硬上限）
 TEST_TIMEOUT_MS         = 5_000        // Socket connect 超时
 TEST_MAX_CONCURRENCY    = 20           // Semaphore 许可数
 DEFAULT_INTERVAL_MINUTES= 10

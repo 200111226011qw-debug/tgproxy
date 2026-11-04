@@ -60,7 +60,7 @@
 
 | ID | 需求 | 验收标准 |
 |---|---|---|
-| P0-1 | 数据源抓取：HTTP GET `https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt`，超时 15s | 抓取失败时记录错误、**保留旧列表**，UI 显示错误条 |
+| P0-1 | 数据源抓取：HTTP GET `https://raw.githubusercontent.com/watchttvv/free-proxy-list/refs/heads/main/proxy.txt`，超时 8s | 抓取失败时记录错误、**保留旧列表**，UI 显示错误条 |
 | P0-2 | 解析与筛选：按行解析 `scheme://host:port + 元数据`；严格校验 IPv4（4 段纯数字 0-255，含 X 掩码丢弃）；host:port 去重；仅保留 socks5 与 MTProto（tg://proxy、t.me/proxy、www.t.me/proxy）；http/https/ss/vmess/vless/trojan 等计入「已排除」；提取元数据（入库时间、[标签]剔除、地区、ISP） | 与桌面版 `parse_proxy_text` 输出等价：entries / excluded / dropped 三项计数一致 |
 | P0-3 | 连通性测试：对每个保留代理 host:port 做 TCP connect，5s 超时，20 并发；成功记延迟 ms，失败标不可用 | 单轮测试在 20 并发约束下执行；不可用项 latency 为空 |
 | P0-4 | 统计：4 项卡片（已保留 / 可用 / 不可用 / 已排除），其中「已排除」= 非 Telegram 类型合法条目 + 非法行（与桌面版 `excluded_count + dropped_count` 一致） | 数字与列表数据实时一致 |
@@ -166,7 +166,7 @@ Material3 `lightColorScheme(primary = #2563EB, …)` 落地；深色主题 P1-4�
 | UI 框架 | Jetpack Compose（BOM 管理版本）+ Material3，**禁止** XML 布局/View 体系混用 |
 | 状态管理 | `ProxyViewModel : ViewModel()`，对外暴露 `StateFlow<ProxyUiState>`；UI 层 `collectAsStateWithLifecycle()` |
 | 业务层 | `ProxyRepository`（编排：Fetcher→Parser→Tester→排序→统计，**纯 Kotlin 无 Android 依赖**，便于 JVM 单测对拍桌面版） |
-| 网络 | OkHttp 4.x（`Dispatchers.IO`），User-Agent 与桌面版一致 `tgproxy/1.0 (local Telegram proxy manager)`；抓取超时 15s |
+| 网络 | OkHttp 4.x（`Dispatchers.IO`），User-Agent 与桌面版一致 `tgproxy/1.0 (local Telegram proxy manager)`；抓取超时 8s |
 | 测试 | `ProxyTester`：`java.net.Socket` + `Semaphore(20)` + `Dispatchers.IO` 协程并发；单连接超时 5s |
 | 持久化 | DataStore Preferences：键 `interval_minutes`（Int，默认 10，校正 1~1440）、`proxy_list_url`（String，默认官方源，须以 http(s):// 开头）；损坏/越界回退默认值（与桌面版 `normalize_config` 一致） |
 | 倒计时 | ViewModel 内协程每秒 tick，暴露 `countdownSec: Int`；保存新间隔立即重置（与桌面版 `set_interval_minutes` 一致） |
@@ -208,7 +208,7 @@ flowchart LR
     VM -->|"StateFlow<ProxyUiState>"| UI
     VM --> REPO["ProxyRepository（纯 Kotlin）"]
     VM --> TICK["倒计时协程（每秒 tick）"]
-    REPO --> FETCH["ProxyFetcher（OkHttp, 15s 超时）"]
+    REPO --> FETCH["ProxyFetcher（OkHttp, 8s 超时）"]
     REPO --> PARSE["ProxyParser（解析/筛选/去重）"]
     REPO --> TEST["ProxyTester（Socket + Semaphore(20), 5s）"]
     VM --> SET["SettingsRepository（DataStore）"]
@@ -229,7 +229,7 @@ flowchart LR
 | `_parse_meta` | 入库时间 / 地区 / ISP 提取（剔除 [标签]、按「—」拆分） | `ProxyParser` | 正则等价移植，保留 `—` 多形态兼容 |
 | `_is_mtproto_url` / `_parse_mtproto` | 识别 `tg://proxy?…` 与 `t.me/proxy?…`；提取 server/port/secret | `ProxyParser` | 两种形态都要识别；secret 缺失则丢弃该行 |
 | `parse_proxy_text` | 解析 + 仅留 socks5/MTProto + host:port 去重 + excluded/dropped 计数 | `ProxyParser.parse()` | 返回三元组与桌面版一致；**excluded 计数含 dropped**（在统计层合并） |
-| `fetch_proxy_text` | HTTP 抓取，15s 超时 | `ProxyFetcher`（OkHttp + `Dispatchers.IO`） | UA 字符串保持一致；失败抛错由上层保留旧列表 |
+| `fetch_proxy_text` | HTTP 抓取，8s 超时 | `ProxyFetcher`（OkHttp + `Dispatchers.IO`） | UA 字符串保持一致；失败抛错由上层保留旧列表 |
 | `test_tcp_latency` | TCP connect，5s 超时 | `ProxyTester`（Socket + `Semaphore(20)`） | 并发上限 20；失败记 null |
 | `sort_proxies` | 可用在前、延迟升序、host/port 兜底 | `ProxyRepository` 排序函数 | 排序键完全一致 |
 | `ProxyManager`（锁 + 状态快照 + refresh 互斥） | 状态管理 | `ProxyRepository`（数据与流程）+ `ProxyViewModel`（UiState + 互斥） | 线程锁 → 协程互斥/单线程化；`get_state()` 快照 → `StateFlow` |
