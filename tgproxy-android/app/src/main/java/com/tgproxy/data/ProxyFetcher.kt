@@ -21,7 +21,7 @@ fun interface ProxySource {
 /**
  * OkHttp 实现的 [ProxySource]（等价桌面版 fetch_proxy_text）。
  *
- * - connect / read 超时均 8s（Constants.FETCH_TIMEOUT_MS，对齐桌面镜像竞速总预算）
+ * - connect / read / call 超时均 8s（Constants.FETCH_TIMEOUT_MS，callTimeout 是单候选硬上限）
  * - User-Agent 与桌面版一致（Constants.USER_AGENT）
  * - 非 2xx 响应抛 IOException("HTTP {code}")
  * - 抓取在 Dispatchers.IO 执行；不实现桌面版的 SSL 免验证兜底（见 ARCHITECTURE.md §5.1）
@@ -102,10 +102,13 @@ class ProxyFetcher(
     }
 
     companion object {
-        /** 默认客户端：connect/read 超时均 15s。 */
+        /** 默认客户端：connect/read/call 超时均 8s。 */
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(Constants.FETCH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .readTimeout(Constants.FETCH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            // callTimeout 覆盖 DNS+连接+写+读**整段调用**：没有它，readTimeout 只作用于
+            // 单次读操作，慢速滴流会让单个候选无限占着一个全局信号量槽，最坏情况无从算起。
+            .callTimeout(Constants.FETCH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             .build()
 
         /** raw.githubusercontent.com 地址转 jsDelivr 镜像候选（等价桌面版 mirror_urls）。 */

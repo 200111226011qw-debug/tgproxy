@@ -247,7 +247,7 @@ tgproxy-android/
 
 ## 测试
 
-`app/src/test/java/com/tgproxy/` 下 20 个 JVM 单测类对拍桌面版行为（debug 单变体 172 例全绿；debug+release 共 344 例）：
+`app/src/test/java/com/tgproxy/` 下 20 个 JVM 单测类对拍桌面版行为（debug 单变体 173 例全绿；debug+release 共 346 例）：
 
 | 测试类 | 覆盖 |
 |---|---|
@@ -271,7 +271,7 @@ tgproxy-android/
 python tools/mutation_check_android.py
 ```
 
-对 11 处关键实现做「改成相反的」注入（协议反向切片、init 尾改明文、去 nonce 校验、dd 错位、通过记失败、无法判定记失败、secret 双解析、去 min_bytes、去 validator、改成顺序、去 stagger），要求目标测试**变红**；每条跑完按字节恢复并校验 SHA-256。判定分四种：
+对 12 处关键实现做「改成相反的」注入（协议反向切片、init 尾改明文、去 nonce 校验、dd 错位、通过记失败、无法判定记失败、secret 双解析、去 min_bytes、去 validator、改成顺序、去 stagger、去 callTimeout），要求目标测试**变红**；每条跑完按字节恢复并校验 SHA-256。判定分四种：
 
 | 结果 | 含义 |
 |---|---|

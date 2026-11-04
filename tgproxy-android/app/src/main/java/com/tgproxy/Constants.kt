@@ -25,8 +25,8 @@ object Constants {
     /** 抓取请求 UA，与桌面版一致 */
     const val USER_AGENT = "tgproxy/1.0 (local Telegram proxy manager)"
 
-    /** 抓取超时（OkHttp connect/read 均为此值），对齐桌面版镜像竞速的总预算 8s。
-     *  原 15s 是 1.9× 的既有差异：20 源 × 4 候选在全局 cap 8 下排队，15s 会把抓取最坏情况拉到 150s。 */
+    /** 单个候选的调用硬上限（`callTimeout`：覆盖 DNS+连接+写+读整段，慢速滴流也逃不掉）。
+     *  有意比桌面**整场竞速总预算 15s**（FETCH_TIMEOUT_SEC）更紧 —— 不是「对齐」，是换 20 源最坏 80s。 */
     const val FETCH_TIMEOUT_MS = 8_000L
 
     /** 同时抓取的数据源上限，等价桌面版 FETCH_MAX_SOURCES=8 */
