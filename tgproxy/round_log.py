@@ -138,7 +138,11 @@ def build_record(ok, error, elapsed_ms, stats, tg_stats, stage_durations, now=No
         },
         # MTProto 侧的计数。加这一段是为了让「首轮是不是干净」可事后回看：
         # 之前 mtproto_gate_stats 只存在内存里，下一轮就被覆盖，冷启动证据会丢。
+        # in_pool / candidates 一起记，才能区分「源里没有 tg:// 链接」和
+        # 「有但全被 TCP 预筛刷掉」——两种情况 tested 都是 0，含义完全不同。
         "mtproto": {
+            "in_pool": int((mtproto_stats or {}).get("in_pool", 0)),
+            "candidates": int((mtproto_stats or {}).get("candidates", 0)),
             "tested": int((mtproto_stats or {}).get("tested", 0)),
             "ok": int((mtproto_stats or {}).get("ok", 0)),
             "fail": int((mtproto_stats or {}).get("fail", 0)),

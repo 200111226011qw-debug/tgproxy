@@ -1266,7 +1266,10 @@ class ProxyManager:
                 self._record_bad_fail(item["host"], item["port"])
         # 第二阶段：TG 实测（DC -> 站点串行两关）
         t_stage = time.perf_counter()
-        verified = self._test_telegram_entries(tcp_ok)
+        # 传 TCP 之前的 MTProto 数量：只有和闸门内的候选数对比，才能分清
+        # 「源里没有 tg:// 链接」与「有但全被 TCP 刷掉」
+        mtproto_in_pool = sum(1 for item in merged if item.get("type") == "mtproto")
+        verified = self._test_telegram_entries(tcp_ok, in_pool=mtproto_in_pool)
         stages["tg"] = time.perf_counter() - t_stage
         # TG 结论沉淀连败计数：两关通过（含超门槛）清零，未过 +1；MTProto 未验证不计
         for item in verified:
@@ -1638,7 +1641,23 @@ class ProxyManager:
                     return dict(item)
         return None
 
-    def _test_telegram_entries(self, entries):
+    def _empty_mtproto_stats(self, in_pool):
+        """闸门没跑过任何节点时的形状。
+
+        刻意返回「全 0 的完整字典」而不是 `{}`：消费方不用为两种形状写分支，
+        而且 `candidates: 0` 本身就是一条信息——这轮没有 MTProto 节点进入闸门，
+        所以 `tested: 0` 读起来是「未覆盖」，不是「全部通过」。
+        """
+        return {
+            "in_pool": int(in_pool or 0),
+            "candidates": 0,
+            "tested": 0,
+            "ok": 0,
+            "fail": 0,
+            "unavailable": 0,
+        }
+
+    def _test_telegram_entries(self, entries, in_pool=None):
         """并发 TG 实测。
 
         - SOCKS5：两关串行（先 CONNECT DC，再 TLS+HTTP 站点），延迟取第一关往返。
@@ -1647,11 +1666,15 @@ class ProxyManager:
         两类共用同一个有界线程池，但**统计严格隔离**：两关漏斗只收 SOCKS5，
         MTProto 单独落 _mtproto_gate_stats。dc_fail/web_fail 是 SOCKS5 专属语义，
         混入 MTProto 会让报表失真。
+
+        :param in_pool: TCP 预筛**之前**池里的 MTProto 节点数。默认与闸门内候选数
+                       相同（直接调用本方法时的合理假设）。三个数一起看才能分清
+                       「源里没有 tg:// 链接」「有但全被 TCP 刷掉」「有候选却没测」。
         """
         if not entries:
             with self._lock:
                 self._tg_gate_stats = {}
-                self._mtproto_gate_stats = {}
+                self._mtproto_gate_stats = self._empty_mtproto_stats(in_pool)
             return []
         samples = []
         samples_lock = threading.Lock()
@@ -1739,6 +1762,10 @@ class ProxyManager:
         with self._lock:
             self._tg_gate_stats = summarize_tg_gates(samples)
             self._mtproto_gate_stats = {
+                # 池里有几个 MTProto（TCP 前）→ 决定了 sources 到底产不产 tg:// 链接
+                "in_pool": int(len(mtproto_indices) if in_pool is None else in_pool),
+                # 真正进入闸门的数量：in_pool > candidates 说明差额死在 TCP 预筛
+                "candidates": len(mtproto_indices),
                 "tested": mt_tested,
                 "ok": mt_ok,
                 "fail": mt_fail,
