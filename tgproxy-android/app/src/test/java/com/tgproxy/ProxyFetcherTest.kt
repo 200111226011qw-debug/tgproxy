@@ -143,4 +143,14 @@ class ProxyFetcherTest {
 
         assertTrue("协程取消必须透传到 call.cancel()", factory.calls[0].cancelled)
     }
+
+    @Test
+    fun `默认客户端用 callTimeout 给单候选硬上限`() {
+        // callTimeout 覆盖 DNS+连接+写+读整段：没有它，readTimeout 只管单次读，
+        // 慢速滴流会让单候选无限占着一个信号量槽，最坏情况无从算起。
+        val client = ProxyFetcher.defaultClient()
+        assertEquals(8_000, client.connectTimeoutMillis)
+        assertEquals(8_000, client.readTimeoutMillis)
+        assertEquals(8_000, client.callTimeoutMillis)
+    }
 }

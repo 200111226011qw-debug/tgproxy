@@ -126,6 +126,13 @@ MUTATIONS = [
         "if (false) delay(index * staggerMs)",
         "com.tgproxy.MirrorRaceTest",
     ),
+    Mutation(
+        "去 callTimeout（单候选无整段硬上限）",
+        "app/src/main/java/com/tgproxy/data/ProxyFetcher.kt",
+        ".callTimeout(Constants.FETCH_TIMEOUT_MS, TimeUnit.MILLISECONDS)\n            .build()",
+        ".build()",
+        "com.tgproxy.ProxyFetcherTest",
+    ),
 ]
 
 
