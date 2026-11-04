@@ -125,6 +125,100 @@ def test_configured_but_no_candidates_is_distinguishable():
     assert state["mtproto_gate_stats"]["in_pool"] == 0
 
 
+# ---------------------------------------------------------------------------
+# HTTP 侧：PUT /api/settings 必须真的能写进去
+
+
+class _FakeServer:
+    def __init__(self):
+        self.calls = {}
+
+    def update_settings(self, **kwargs):
+        self.calls = kwargs
+        return {"ok": True}
+
+
+class _FakeHandler:
+    """只实现 _handle_settings_update 用到的三个接口，避免起真服务。"""
+
+    def __init__(self, body):
+        self._body = body
+        self.sent = None
+        self.status = 200
+        self.server = _FakeServer()
+
+    def _read_json_body(self):
+        return self._body
+
+    def _send_json(self, payload, status=200):
+        self.sent = payload
+        self.status = status
+
+
+def test_put_passes_mtproto_list_urls_through():
+    """这条是防「分支存在但生产不可达」：曾经 update_settings 收这个参数，
+    但 _handle_settings_update 从没传过，等于写不进去。"""
+    h = _FakeHandler({"mtproto_list_urls": ["https://e.com/mt.txt"]})
+    app.ApiHandler._handle_settings_update(h)
+
+    assert h.status == 200, h.sent
+    assert h.server.calls.get("mtproto_list_urls") == ["https://e.com/mt.txt"]
+
+
+def test_put_can_clear_mtproto_list_urls():
+    h = _FakeHandler({"mtproto_list_urls": []})
+    app.ApiHandler._handle_settings_update(h)
+
+    assert h.status == 200, h.sent
+    assert h.server.calls.get("mtproto_list_urls") == []
+
+
+def test_put_rejects_bad_mtproto_url():
+    h = _FakeHandler({"mtproto_list_urls": ["ftp://e.com/x"]})
+    app.ApiHandler._handle_settings_update(h)
+
+    assert h.status == 400
+    assert "http" in h.sent["error"]
+    assert h.server.calls == {}
+
+
+def test_put_ignores_body_without_mtproto_key():
+    """不传这个键 = 不改动，不能把它当成「清空」。"""
+    h = _FakeHandler({"interval_minutes": 5})
+    app.ApiHandler._handle_settings_update(h)
+
+    assert h.status == 200, h.sent
+    assert h.server.calls.get("mtproto_list_urls") is None
+
+
+# ---------------------------------------------------------------------------
+# 校验函数（与配置文件那条走静默丢弃不同：API 必须报错）
+
+
+def test_validate_accepts_list():
+    assert app.validate_mtproto_list_urls(["https://e.com/a.txt"]) == (
+        ["https://e.com/a.txt"], None)
+
+
+def test_validate_rejects_non_list():
+    _, err = app.validate_mtproto_list_urls("https://e.com/a.txt")
+    assert err
+
+
+def test_validate_reports_bad_scheme_instead_of_dropping():
+    got, err = app.validate_mtproto_list_urls(["https://e.com/a.txt", "ftp://e.com/b"])
+    assert got is None and err
+
+
+def test_validate_dedupes_and_caps():
+    got, err = app.validate_mtproto_list_urls(["https://e.com/a.txt", "https://e.com/a.txt"])
+    assert got == ["https://e.com/a.txt"] and err is None
+
+    too_many = ["https://e.com/%d.txt" % i for i in range(app.MAX_PROXY_LIST_URLS + 1)]
+    got, err = app.validate_mtproto_list_urls(too_many)
+    assert got is None and "最多" in err
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
