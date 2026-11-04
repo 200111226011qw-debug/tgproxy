@@ -108,8 +108,8 @@ MUTATIONS = [
     Mutation(
         "去 validator（纯注释当成功）",
         "app/src/main/java/com/tgproxy/data/ProxyFetcher.kt",
-        "if (!hasUsableLine(bytes.toString(Charsets.UTF_8))) {",
-        "if (false && !hasUsableLine(bytes.toString(Charsets.UTF_8))) {",
+        "if (!hasUsableLine(text)) {",
+        "if (false && !hasUsableLine(text)) {",
         "com.tgproxy.ProxyFetcherTest",
     ),
     Mutation(

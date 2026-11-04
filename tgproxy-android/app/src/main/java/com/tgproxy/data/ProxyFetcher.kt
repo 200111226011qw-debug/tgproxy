@@ -21,7 +21,7 @@ fun interface ProxySource {
 /**
  * OkHttp 实现的 [ProxySource]（等价桌面版 fetch_proxy_text）。
  *
- * - connect / read 超时均 15s（Constants.FETCH_TIMEOUT_MS）
+ * - connect / read 超时均 8s（Constants.FETCH_TIMEOUT_MS，对齐桌面镜像竞速总预算）
  * - User-Agent 与桌面版一致（Constants.USER_AGENT）
  * - 非 2xx 响应抛 IOException("HTTP {code}")
  * - 抓取在 Dispatchers.IO 执行；不实现桌面版的 SSL 免验证兜底（见 ARCHITECTURE.md §5.1）
@@ -63,8 +63,9 @@ class ProxyFetcher(
                             return
                         }
                         val bytes = response.body?.bytes() ?: ByteArray(0)
-                        validateBody(bytes)
-                        cont.resume(bytes.toString(Charsets.UTF_8), null)
+                        // 校验 + 解码只做一次，返回文本（11 MB 的 body 别解码两遍）
+                        val body = validateBody(bytes)
+                        cont.resume(body, null)
                     } catch (e: Exception) {
                         cont.resumeWith(Result.failure(e))
                     }
@@ -87,14 +88,17 @@ class ProxyFetcher(
      *
      * 空体 / 纯注释在「端口通、返回 2xx」时也会发生（CDN 缓存穿透、上游截断），
      * 不判掉的话，一轮抓取会把「0 个节点」当成功吞下。按**字节**量（桌面用 len(raw)）。
+     * 返回解码后的文本：调用方要再 decode 一遍就会把 11 MB 的 body 解两次。
      */
-    private fun validateBody(bytes: ByteArray) {
+    private fun validateBody(bytes: ByteArray): String {
         if (bytes.size < minBytes) {
             throw IOException("响应仅 ${bytes.size} 字节（< $minBytes），按截断处理")
         }
-        if (!hasUsableLine(bytes.toString(Charsets.UTF_8))) {
+        val text = bytes.toString(Charsets.UTF_8)
+        if (!hasUsableLine(text)) {
             throw IOException("响应无有效代理行")
         }
+        return text
     }
 
     companion object {
