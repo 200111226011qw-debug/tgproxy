@@ -934,7 +934,9 @@ def main():
         known_good_enabled=config["known_good_enabled"],
     )
     # 用户手动编辑 config.json 加回被停用的源后，重启即宽恕（重新观察）
-    manager.forgive_sources(config["proxy_list_urls"])
+    # 两类源都要宽恕：只传普通源的话，改好一个被停用的 MTProto 源重启后仍不会被抓，
+    # 表现为 in_pool 恒为 0 而界面显示「已配置 · 无候选」
+    manager.forgive_sources(config["proxy_list_urls"] + config["mtproto_list_urls"])
     server, port = create_server(ApiHandler, manager, config)
     config["port"] = port
     save_config(config)

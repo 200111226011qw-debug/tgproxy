@@ -1015,18 +1015,32 @@ class ProxyManager:
         with self._lock:
             old_urls = set(self._proxy_list_urls)
             self._proxy_list_urls = new_urls
-            added = [u for u in new_urls if u not in old_urls]
-            if not added:
-                return
-            health = self._load_source_health()
-            changed = False
-            for url in added:
-                h = health.get(url)
-                if h and (h.get("parked") or h.get("hist") or h.get("fails")):
-                    health[url] = {"hist": [], "fails": 0, "parked": None}
-                    changed = True
-            if changed:
-                self._save_source_health(health)
+            self._forgive_added_urls(old_urls, new_urls)
+
+    def _forgive_added_urls(self, old_urls, new_urls):
+        """新增的 URL 若带着旧病史（停用 / 连败 / 历史），清空后重新观察。
+
+        用户把停用过的源改好、或加回配置时，不该被上一次的失败记录拖累——
+        否则源一直处于 parked，`in_pool` 永远是 0，而界面只会显示
+        「已配置 · 无候选」，完全看不出是源被停用了。
+
+        与 set_proxy_list_urls 里原来的逻辑完全一致，只是抽出来给两个 setter 共用，
+        避免 MTProto 源再次出现「普通源有宽恕、它没有」的不对称。
+
+        调用方需持有 self._lock。
+        """
+        added = [u for u in new_urls if u not in old_urls]
+        if not added:
+            return
+        health = self._load_source_health()
+        changed = False
+        for url in added:
+            h = health.get(url)
+            if h and (h.get("parked") or h.get("hist") or h.get("fails")):
+                health[url] = {"hist": [], "fails": 0, "parked": None}
+                changed = True
+        if changed:
+            self._save_source_health(health)
 
     def _all_source_urls(self):
         """本轮要抓的源：普通源按上限截断，MTProto 专用源在其**之后**追加。
@@ -1045,9 +1059,16 @@ class ProxyManager:
         return urls
 
     def set_mtproto_list_urls(self, urls):
-        """热更新 MTProto 专用源（下次刷新生效）。空列表表示「未配置」。"""
+        """热更新 MTProto 专用源（下次刷新生效）。空列表表示「未配置」。
+
+        与普通源走同一套「新增即宽恕」：否则改好一个被停用的 MTProto 源之后，
+        它仍然不会被抓，`in_pool` 恒为 0 而界面显示「已配置 · 无候选」。
+        """
+        new_urls = [str(u) for u in (urls or []) if u]
         with self._lock:
-            self._mtproto_list_urls = [str(u) for u in (urls or []) if u]
+            old_urls = set(self._mtproto_list_urls)
+            self._mtproto_list_urls = new_urls
+            self._forgive_added_urls(old_urls, new_urls)
 
     def set_known_good_enabled(self, enabled):
         """热更新 known_good 沉淀开关（下次刷新生效）：关闭后不再读取或写入
