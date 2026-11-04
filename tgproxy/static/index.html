@@ -509,11 +509,23 @@
       el.title = "该源未返回缓存年龄（Age 头），无法判断新鲜度";
       return;
     }
-    var mins = Math.round((fm.age_seconds || 0) / 60);
-    el.textContent = (fm.stale ? "⚠ " : "") + (mins >= 1 ? mins + " 分钟前" : "刚刚");
+    // age_seconds 是「最旧的那份」：合并列表是各源节点的并集，
+    // 一个新鲜源刷新不了别的源的节点。区间显示（如 2–57 分钟前）才不撒谎。
+    var oldest = fm.age_seconds;
+    var newest = (fm.age_seconds_newest === undefined || fm.age_seconds_newest === null)
+      ? oldest : fm.age_seconds_newest;
+    var mOld = Math.round((oldest || 0) / 60);
+    var mNew = Math.round((newest || 0) / 60);
+    var text;
+    if (mOld < 1) { text = "刚刚"; }
+    else if (mNew === mOld) { text = mOld + " 分钟前"; }
+    else if (mNew < 1) { text = "刚刚–" + mOld + " 分钟前"; }
+    else { text = mNew + "–" + mOld + " 分钟前"; }
+    el.textContent = (fm.stale ? "⚠ " : "") + text;
     el.title = fm.stale
-      ? "列表来自镜像缓存，已超过 " + Math.round((fm.stale_after_sec || 900) / 60) + " 分钟，不是实时数据"
-      : "列表数据的新鲜度";
+      ? "有源返回的是镜像缓存：最旧的一份已 " + mOld + " 分钟（阈值 " +
+        Math.round((fm.stale_after_sec || 900) / 60) + " 分钟），合并列表里包含这些旧节点"
+      : "列表数据的新鲜度（取最旧源）";
   }
 
   function renderSummary(data) {
