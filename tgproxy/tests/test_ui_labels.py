@@ -41,22 +41,36 @@ MT_CASES = [
     (True, 4, 4, "4 个候选"),
 ]
 
-# (updated, age_seconds, age_seconds_newest, stale, via_mirror_sources) -> 期望文案
+# (updated, age_seconds, age_seconds_newest, stale, via_mirror_sources,
+#  期望文案, tooltip 必须包含的子串)
+#
+# 最后一项守的是「tooltip 始终用分钟」：显示层换单位不该丢掉精确值。
 FETCH_CASES = [
-    (False, None, None, False, 0, "—"),
-    (True, None, None, False, 0, "直连"),
-    (True, None, None, False, 2, "镜像"),
-    (True, 20, 20, False, 0, "刚刚"),
-    (True, 20, 10, False, 0, "刚刚"),
+    (False, None, None, False, 0, "—", ""),
+    (True, None, None, False, 0, "直连", ""),
+    (True, None, None, False, 2, "镜像", ""),
+    (True, 20, 20, False, 0, "刚刚", ""),
+    (True, 20, 10, False, 0, "刚刚", ""),
     # stale_after_sec 可配到 30 秒以下，此时「陈旧」与「刚刚」会撞车
-    (True, 20, 20, True, 0, "⚠ 不到 1 分钟"),
-    (True, 40, 40, False, 0, "1 分钟前"),
+    (True, 20, 20, True, 0, "⚠ 不到 1 分钟", ""),
+    (True, 40, 40, False, 0, "1 分钟前", ""),
     # 后端不返回 newest 时必须回落到 oldest（不显示成区间）
-    (True, 40, None, False, 0, "1 分钟前"),
-    (True, 40, 10, False, 0, "刚刚–1 分钟前"),
-    (True, 3420, 3420, True, 0, "⚠ 57 分钟前"),
+    (True, 40, None, False, 0, "1 分钟前", ""),
+    (True, 40, 10, False, 0, "刚刚–1 分钟前", ""),
+    (True, 3420, 3420, True, 0, "⚠ 57 分钟前", "57 分钟"),
+    # 阈值下沿：59 分钟仍念分钟
+    (True, 3540, 3540, True, 0, "⚠ 59 分钟前", "59 分钟"),
+    # 阈值：正好 60 分钟换成小时
+    (True, 3600, 3600, True, 0, "⚠ 1 小时前", "60 分钟"),
+    (True, 4500, 4500, True, 0, "⚠ 1.3 小时前", "75 分钟"),
     # 两个源：最旧 57 分钟、最新 2 分钟 —— 区间才不撒谎
-    (True, 3420, 120, True, 2, "⚠ 2–57 分钟前"),
+    (True, 3420, 120, True, 2, "⚠ 2–57 分钟前", "57 分钟"),
+    # 两端都在小时级：合并成一个区间，不重复单位
+    (True, 22320, 7440, True, 0, "⚠ 2.1–6.2 小时前", "372 分钟"),
+    # 跨单位：各用各的，比强行统一成「0.35–6.2 小时」好读得多
+    (True, 22340, 1257, True, 4, "⚠ 21 分钟–6.2 小时前", "372 分钟"),
+    # 最旧已小时级、最新还不到 30 秒 —— 两端极值同时出现
+    (True, 22320, 10, True, 0, "⚠ 刚刚–6.2 小时前", "372 分钟"),
 ]
 
 
@@ -122,8 +136,9 @@ console.log("OK " + cases.length);
 
 def test_fetch_age_label_matrix(tmp_path):
     cases = json.dumps(
-        [{"updated": u, "age": a, "newest": n, "stale": s, "mirror": m, "text": t}
-         for u, a, n, s, m, t in FETCH_CASES],
+        [{"updated": u, "age": a, "newest": n, "stale": st, "mirror": m,
+          "text": t, "titleHas": th}
+         for u, a, n, st, m, t, th in FETCH_CASES],
         ensure_ascii=False,
     )
     harness = _extract("fetchAgeLabel") + """
@@ -137,11 +152,19 @@ for (const c of cases) {
     via_mirror_sources: c.mirror
   });
   if (!got || got.text !== c.text) { bad.push(c.text + " => " + (got && got.text)); continue; }
-  if (c.text === "—" ? got.title !== "" : !got.title) bad.push(c.text + " (title)");
-  // ⚠ 必须严格跟随 stale：多一个或少一个都是撒谎。
+  if (c.text === "\\u2014" ? got.title !== "" : !got.title) bad.push(c.text + " (title)");
+  // tooltip 必须保留分钟：显示层换单位不能丢掉精确值
+  if (c.titleHas && (got.title || "").indexOf(c.titleHas) < 0) {
+    bad.push(c.text + " (title 缺「" + c.titleHas + "」: " + got.title + ")");
+  }
+  // \\u26a0 必须严格跟随 stale：多一个或少一个都是撒谎。
   // 年龄未知时无从展示，跳过（后端在这种情况下不会置 stale）。
   if (c.age !== null && c.stale !== got.text.startsWith("\\u26a0 ")) {
     bad.push(c.text + " (\\u26a0 与 stale=" + c.stale + " 不一致)");
+  }
+  // 单位粘连检查：区间两端不同单位时必须用空格隔开
+  if (/(\\u5c0f\\u65f6)(\\u5206\\u949f)/.test(got.text)) {
+    bad.push(c.text + " (单位粘连)");
   }
 }
 if (bad.length) { console.log("FAIL " + bad.join(" | ")); process.exit(1); }

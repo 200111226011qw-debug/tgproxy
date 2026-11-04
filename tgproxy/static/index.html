@@ -507,6 +507,11 @@
      标注给 tests/test_ui_labels.py 提取：那个测试用 node 跑真断言，
      所以这段代码不允许依赖 $() 或任何浏览器 API。 */
   // >>> fetchAgeLabel
+  /* 分钟数达到这个门槛就用小时。取 60 而不是 120：60–119 分钟若仍念分钟，
+    会出现「60 分钟前」「119 分钟前」这种既不口语、又让大数字钝化感知的表达；
+    而刷新间隔本来就是 10 分钟，换算成小时损失 6 分钟精度，落在噪声里。 */
+  var AGE_HOUR_MIN = 60;
+
   function fetchAgeLabel(updated, fm) {
     fm = fm || {};
     if (!updated) {
@@ -521,18 +526,40 @@
           : "源未返回缓存年龄（Age 头），无法判断新鲜度"
       };
     }
+
+    /* 单点怎么念：<1 分钟返回 null（交给调用方说「刚刚」）。
+       拆成 value/unit 而不是整串，因为区间两端可能跨单位——
+       「21 分钟–6.2 小时前」比「0.35–6.2 小时前」好读得多。 */
+    function parts(mins) {
+      if (mins < 1) return null;
+      if (mins >= AGE_HOUR_MIN) {
+        return { value: (mins / 60).toFixed(1).replace(/\.0$/, ""), unit: "小时" };
+      }
+      return { value: String(mins), unit: "分钟" };
+    }
+
     var oldest = fm.age_seconds;
     var newest = (fm.age_seconds_newest === undefined || fm.age_seconds_newest === null)
       ? oldest : fm.age_seconds_newest;
     var mOld = Math.round((oldest || 0) / 60);
     var mNew = Math.round((newest || 0) / 60);
+    var o = parts(mOld);
+    var n = parts(mNew);
     var text;
     /* stale 与「刚刚」不能同时出现：stale_after_sec 可配到 30 秒以下，
        那时最旧的一份明明已被判陈旧，文案却说「刚刚」，自相矛盾。 */
-    if (mOld < 1) { text = fm.stale ? "不到 1 分钟" : "刚刚"; }
-    else if (mNew === mOld) { text = mOld + " 分钟前"; }
-    else if (mNew < 1) { text = "刚刚–" + mOld + " 分钟前"; }
-    else { text = mNew + "–" + mOld + " 分钟前"; }
+    if (!o) {
+      text = fm.stale ? "不到 1 分钟" : "刚刚";
+    } else if (!n) {
+      text = "刚刚–" + o.value + " " + o.unit + "前";
+    } else if (n.value === o.value && n.unit === o.unit) {
+      text = o.value + " " + o.unit + "前";
+    } else if (n.unit === o.unit) {
+      text = n.value + "–" + o.value + " " + o.unit + "前";
+    } else {
+      text = n.value + " " + n.unit + "–" + o.value + " " + o.unit + "前";
+    }
+    // tooltip 始终用分钟：精确值不该因为显示层换单位而丢掉
     var oldestText = mOld < 1 ? "不足 1 分钟" : mOld + " 分钟";
     return {
       text: (fm.stale ? "⚠ " : "") + text,
