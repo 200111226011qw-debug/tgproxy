@@ -82,10 +82,28 @@ def test_all_source_urls_merges_and_dedupes():
     assert mgr._all_source_urls() == ["https://a.com/p.txt", "https://e.com/mt.txt"]
 
 
-def test_all_source_urls_caps_total():
-    many = ["https://e.com/%d.txt" % i for i in range(pm.FETCH_MAX_SOURCES)]
-    mgr = _manager(mtproto_list_urls=many)
-    assert len(mgr._all_source_urls()) == pm.FETCH_MAX_SOURCES
+def test_all_source_urls_caps_proxy_only():
+    """截断只作用于普通源；MTProto 源被一起切掉等于整个能力静默失效。"""
+    many = ["https://e.com/%d.txt" % i for i in range(pm.FETCH_MAX_SOURCES + 5)]
+    mgr = pm.ProxyManager(proxy_list_urls=many,
+                          mtproto_list_urls=["https://m.com/mt.txt"])
+    urls = mgr._all_source_urls()
+    assert len(urls) == pm.FETCH_MAX_SOURCES + 1
+    assert urls[-1] == "https://m.com/mt.txt"
+
+
+def test_mtproto_source_survives_proxy_cap():
+    """普通源配满上限（20）时 MTProto 源仍须被抓。
+
+    否则界面显示「已配置 · 无候选」，与「源里没有 t.me/proxy」无法区分 ——
+    正是这套状态位要消除的二义。
+    """
+    proxy = ["https://p.com/%d.txt" % i for i in range(pm.FETCH_MAX_SOURCES)]
+    mt = "https://m.com/mt.txt"
+    mgr = pm.ProxyManager(proxy_list_urls=proxy, mtproto_list_urls=[mt])
+    urls = mgr._all_source_urls()
+    assert mt in urls
+    assert len(urls) == pm.FETCH_MAX_SOURCES + 1
 
 
 def test_set_mtproto_list_urls_hot_update():

@@ -1029,12 +1029,20 @@ class ProxyManager:
                 self._save_source_health(health)
 
     def _all_source_urls(self):
-        """本轮要抓的源：普通源 + MTProto 专用源（按出现顺序去重后截断）。"""
-        urls = list(self._proxy_list_urls)
+        """本轮要抓的源：普通源按上限截断，MTProto 专用源在其**之后**追加。
+
+        `FETCH_MAX_SOURCES` 约束的是「同时打多少个普通源」。MTProto 源是唯一一类、
+        数量很少，一旦跟着一起被截掉就等于整个能力静默失效——而界面此时显示
+        「已配置 · 无候选」，与「源里没有 t.me/proxy」完全无法区分，正是这套状态位
+        要消除的二义。所以截断只作用于普通源。
+
+        总量上限由配置侧兜底：两个列表各自最多 MAX_PROXY_LIST_URLS 条。
+        """
+        urls = list(self._proxy_list_urls)[:FETCH_MAX_SOURCES]
         for extra in self._mtproto_list_urls:
             if extra not in urls:
                 urls.append(extra)
-        return urls[:FETCH_MAX_SOURCES]
+        return urls
 
     def set_mtproto_list_urls(self, urls):
         """热更新 MTProto 专用源（下次刷新生效）。空列表表示「未配置」。"""
