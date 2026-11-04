@@ -105,16 +105,35 @@ def test_fetch_one_carries_age(monkeypatch):
 # 新鲜度汇总
 
 
-def test_summarize_takes_freshest_source():
+def test_summarize_reports_oldest_source():
+    """合并列表是并集：有源陈旧就算陈旧，不能被一个新鲜源洗白。"""
     fetched = [
         {"status": "ok", "age_seconds": 3405, "via_mirror": True},
         {"status": "ok", "age_seconds": 120, "via_mirror": True},
         {"status": "failed", "age_seconds": None, "via_mirror": False},
     ]
     meta = pm.summarize_fetch_meta(fetched, stale_after=900)
-    assert meta["age_seconds"] == 120
-    assert meta["stale"] is False
+    assert meta["age_seconds"] == 3405          # 最旧
+    assert meta["age_seconds_oldest"] == 3405
+    assert meta["age_seconds_newest"] == 120    # 最新，供界面显示区间
+    assert meta["stale"] is True
+    assert meta["sources_counted"] == 2
     assert meta["via_mirror_sources"] == 2
+
+
+def test_one_fresh_source_does_not_hide_stale_siblings():
+    """两个源：一个刚更新、一个 57 分钟前。整体必须判陈旧。
+
+    这正是 min() 口径的失真场景：界面显示「2 分钟前」，但池里一半节点是 1 小时前的。
+    """
+    fetched = [
+        {"status": "ok", "age_seconds": 120, "via_mirror": True},
+        {"status": "ok", "age_seconds": 3420, "via_mirror": True},
+    ]
+    meta = pm.summarize_fetch_meta(fetched, stale_after=900)
+    assert meta["stale"] is True
+    assert meta["age_seconds"] == 3420
+    assert meta["age_seconds_newest"] == 120
 
 
 def test_summarize_marks_stale_beyond_threshold():
@@ -135,7 +154,9 @@ def test_summarize_unknown_age_is_not_stale():
 def test_summarize_empty_is_safe():
     meta = pm.summarize_fetch_meta([])
     assert meta["age_seconds"] is None
+    assert meta["age_seconds_newest"] is None
     assert meta["stale"] is False
+    assert meta["sources_counted"] == 0
     assert meta["via_mirror_sources"] == 0
 
 

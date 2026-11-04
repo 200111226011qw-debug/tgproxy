@@ -489,20 +489,30 @@ def consume_fetch_meta():
 def summarize_fetch_meta(fetched, stale_after=None):
     """汇总本轮抓取的新鲜度（纯函数，便于单测）。
 
-    年龄取所有成功源里**最小**的那个：只要有一个源是新的，合并后的列表就是新的。
-    读不到 `Age` 的源（直连、或上游没回该头）不参与计算 —— 把「未知」当成 0
-    会伪造出「刚刚更新」的假象。
+    年龄取所有成功源里**最旧**的那个（max）。合并结果是各源节点的**并集**，
+    不是某一份列表的副本：一个 2 分钟前的新源只刷新它自己贡献的那些节点，
+    掩盖不了另一个源 1 小时前的节点。用 min 会得到「2 分钟前、不陈旧」，
+    而那正是这个特性存在的理由——不把旧数据静默说成新的。
+
+    同时保留 `age_seconds_newest`，界面可以显示「2–57 分钟前」这种区间，
+    既不吓人也不撒谎。读不到 `Age` 的源（直连、或上游没回该头）不参与计算：
+    把「未知」当成 0 会伪造出「刚刚更新」。
     """
     if stale_after is None:
         stale_after = FETCH_STALE_AFTER_SEC
     ages = [item.get("age_seconds") for item in fetched
             if item and item.get("status") == "ok"
             and item.get("age_seconds") is not None]
-    freshest = min(ages) if ages else None
+    oldest = max(ages) if ages else None
+    newest = min(ages) if ages else None
     return {
-        "age_seconds": freshest,
-        "stale": freshest is not None and freshest > stale_after,
+        # 兼容字段：语义是「最旧的那份」，与 stale 判定同源，避免两个数打架
+        "age_seconds": oldest,
+        "age_seconds_oldest": oldest,
+        "age_seconds_newest": newest,
+        "stale": oldest is not None and oldest > stale_after,
         "stale_after_sec": stale_after,
+        "sources_counted": len(ages),
         "via_mirror_sources": sum(
             1 for item in fetched if item and item.get("via_mirror")),
     }

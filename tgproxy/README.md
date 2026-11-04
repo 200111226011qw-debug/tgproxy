@@ -1,6 +1,8 @@
 # tgproxy — 本地 Telegram 代理管理工具（桌面版）
 
-自动抓取免费代理列表，本地测试连通性与延迟，仅筛选适用于 Telegram 的代理，并通过简洁的本地 Web 界面展示。**纯 Python 标准库实现，零第三方依赖。**
+自动抓取免费代理列表，本地测试连通性与延迟，仅筛选适用于 Telegram 的代理，并通过简洁的本地 Web 界面展示。**纯 Python 标准库实现，运行时零第三方依赖。**
+
+> 唯一例外是 MTProto 节点的**真校验**：obfuscated2 握手需要 AES-256-CTR，走 `cryptography`（或退路 `pycryptodome`）。缺库时该能力降级——MTProto 节点标为「未验证」，其余功能（抓取 / TCP 预筛 / SOCKS5 两关实测）完全不受影响。
 
 ## 功能
 
@@ -29,12 +31,37 @@ python app.py
 
 启动后自动打开 `http://127.0.0.1:8765/`（端口被占用时自动顺延至 8766、8767…），终端打印实际地址。按 `Ctrl+C` 退出。
 
+想要 MTProto 节点也能真校验，先装一次依赖：
+
+```bash
+pip install -r requirements.txt    # 仅 cryptography
+```
+
+## 测试
+
+```bash
+pip install -r requirements.txt    # 必装，否则 MTProto 相关 25 个用例会失败
+python -m pytest tests -q          # 期望 189 passed
+```
+
+裸环境（没装 `cryptography` / `pycryptodome`）直接跑是 `25 failed, 164 passed`，失败原因统一是
+`MtprotoError: 缺少 AES 实现`。**这是有意的硬失败，不是漏了 skip**：产品侧缺库时安静降级没问题，
+但测试侧如果 skip，CI 上会长期绿着却没人发现「真校验其实一次都没跑过」。装上就全绿。
+
+单独验证并发首次解析的竞态修复（不需要网络）：
+
+```bash
+python tests/test_aes_backend_race.py    # 期望 3 行 PASS
+```
+
 ## 文件说明
 
 | 文件 | 职责 |
 |---|---|
 | `app.py` | 入口：本地 HTTP 服务、JSON API（/api/proxies、/api/refresh、/api/settings）、后台定时调度、配置读写、端口探测 |
 | `proxy_manager.py` | 抓取、解析、Telegram 筛选、并发 TCP 测试、排序、状态管理 |
+| `mirror_race.py` | 镜像竞速（直连 + jsDelivr 并发，取首个完整响应），顺带解析 `Age` 上报列表新鲜度 |
+| `mtproto_handshake.py` | MTProto 真校验：obfuscated2 握手 + `req_pq_multi` + `resPQ` nonce 校验 |
 | `static/index.html` | Web 界面（原生 HTML/CSS/JS 单页，零外链 CDN，离线可用） |
 
 运行时生成的文件全部在**程序目录下的 `data/`**（v2.2.1 起；旧版本平铺在程序目录里，
