@@ -67,6 +67,7 @@ v1.1.0 起、线上正文非空的版本，Release 正文均已归档在 [`docs/
 | android-v2.4.0 | 安卓抓取镜像竞速 + 完整性下限 + callTimeout 硬上限 | [android-v2.4.0.md](docs/release-notes/android-v2.4.0.md) |
 | android-v2.3.0 | 安卓 MTProto 真握手（obfuscated2 + resPQ 回显校验）；secret 单路径解析 | [android-v2.3.0.md](docs/release-notes/android-v2.3.0.md) |
 | android-v2.2.1 | 安卓正式签名版（功能与 v2.1.0 相同，仅签名转正式） | [android-v2.2.1.md](docs/release-notes/android-v2.2.1.md) |
+| v2.3.0 | 桌面 MTProto 真握手 + 镜像竞速 + 列表新鲜度 | [v2.3.0.md](docs/release-notes/v2.3.0.md) |
 | v2.2.1 | 商店版 Telegram 唤起假阴性修复；状态文件收敛到 `data/`；限制内置窗口体积 | [v2.2.1.md](docs/release-notes/v2.2.1.md) |
 | v2.2.0 | 桌面独立窗口（浏览器 `--app` 模式，零新依赖）；关窗口即退出；唤起兜底 | [v2.2.0.md](docs/release-notes/v2.2.0.md) |
 | v2.1.0 | 双端数据契约对齐；性能收官（中位 127.63s → 44.76s） | [v2.1.0.md](docs/release-notes/v2.1.0.md) |
