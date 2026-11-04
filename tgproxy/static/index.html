@@ -500,33 +500,56 @@
   /* 列表新鲜度：jsDelivr 的 s-maxage 是 12 小时，而刷新间隔默认 10 分钟。
      所以完全可能「界面刚从刷新完」，用的却是半天前的列表。这里如实显示
      这份列表在 CDN 里躺了多久，不假装是刚抓的。 */
-  function renderFetchAge(data, updated) {
-    var el = $("side-fetch-age");
-    if (!el) return;
-    var fm = data.fetch_meta || {};
-    if (!updated) { el.textContent = "—"; el.title = ""; return; }
-    if (fm.age_seconds === null || fm.age_seconds === undefined) {
-      el.textContent = fm.via_mirror_sources ? "镜像" : "直连";
-      el.title = "该源未返回缓存年龄（Age 头），无法判断新鲜度";
-      return;
+  /* 列表新鲜度的文案选择 —— 纯函数，不碰 DOM。
+     合并列表是各源节点的并集，一个新鲜源刷新不了别的源的节点，所以显示区间
+     （如「2–57 分钟前」）而不是只报最新的一份。stale 由后端按「最旧源」判定。
+
+     标注给 tests/test_ui_labels.py 提取：那个测试用 node 跑真断言，
+     所以这段代码不允许依赖 $() 或任何浏览器 API。 */
+  // >>> fetchAgeLabel
+  function fetchAgeLabel(updated, fm) {
+    fm = fm || {};
+    if (!updated) {
+      return { text: "—", title: "" };
     }
-    // age_seconds 是「最旧的那份」：合并列表是各源节点的并集，
-    // 一个新鲜源刷新不了别的源的节点。区间显示（如 2–57 分钟前）才不撒谎。
+    if (fm.age_seconds === null || fm.age_seconds === undefined) {
+      var srcs = fm.via_mirror_sources || 0;
+      return {
+        text: srcs ? "镜像" : "直连",
+        title: srcs
+          ? "有 " + srcs + " 个源走了镜像，且都未返回 Age 头，无法判断新鲜度"
+          : "源未返回缓存年龄（Age 头），无法判断新鲜度"
+      };
+    }
     var oldest = fm.age_seconds;
     var newest = (fm.age_seconds_newest === undefined || fm.age_seconds_newest === null)
       ? oldest : fm.age_seconds_newest;
     var mOld = Math.round((oldest || 0) / 60);
     var mNew = Math.round((newest || 0) / 60);
     var text;
-    if (mOld < 1) { text = "刚刚"; }
+    /* stale 与「刚刚」不能同时出现：stale_after_sec 可配到 30 秒以下，
+       那时最旧的一份明明已被判陈旧，文案却说「刚刚」，自相矛盾。 */
+    if (mOld < 1) { text = fm.stale ? "不到 1 分钟" : "刚刚"; }
     else if (mNew === mOld) { text = mOld + " 分钟前"; }
     else if (mNew < 1) { text = "刚刚–" + mOld + " 分钟前"; }
     else { text = mNew + "–" + mOld + " 分钟前"; }
-    el.textContent = (fm.stale ? "⚠ " : "") + text;
-    el.title = fm.stale
-      ? "有源返回的是镜像缓存：最旧的一份已 " + mOld + " 分钟（阈值 " +
-        Math.round((fm.stale_after_sec || 900) / 60) + " 分钟），合并列表里包含这些旧节点"
-      : "列表数据的新鲜度（取最旧源）";
+    var oldestText = mOld < 1 ? "不足 1 分钟" : mOld + " 分钟";
+    return {
+      text: (fm.stale ? "⚠ " : "") + text,
+      title: fm.stale
+        ? "有源返回的是镜像缓存：最旧的一份已 " + oldestText + "（阈值 " +
+          Math.round((fm.stale_after_sec || 900) / 60) + " 分钟），合并列表里包含这些旧节点"
+        : "列表数据的新鲜度（取最旧源）"
+    };
+  }
+  // <<< fetchAgeLabel
+
+  function renderFetchAge(data, updated) {
+    var el = $("side-fetch-age");
+    if (!el) return;
+    var view = fetchAgeLabel(updated, data.fetch_meta || {});
+    el.textContent = view.text;
+    el.title = view.title;
   }
 
   /* MTProto 源的状态。
