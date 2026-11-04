@@ -139,6 +139,27 @@ def normalize_mtproto_list_urls(value):
     return cleaned
 
 
+def validate_mtproto_list_urls(raw):
+    """校验来自 HTTP 的 mtproto_list_urls，返回 (cleaned, error)。
+
+    与 normalize_mtproto_list_urls 的区别：这里**不静默丢弃**非法项，而是报错。
+    配置文件里写错一项，丢掉还能继续跑；API 收到非法输入却悄悄忽略，调用方会
+    以为设置成功了。
+    """
+    if not isinstance(raw, list):
+        return None, "mtproto_list_urls 必须是数组"
+    cleaned = []
+    for item in raw:
+        url = str(item or "").strip()
+        if not url.startswith(("http://", "https://")):
+            return None, "mtproto_list_urls 中每一项都必须以 http:// 或 https:// 开头"
+        if url not in cleaned:
+            cleaned.append(url)
+    if len(cleaned) > MAX_PROXY_LIST_URLS:
+        return None, "mtproto_list_urls 最多 %d 个" % MAX_PROXY_LIST_URLS
+    return cleaned, None
+
+
 def normalize_config(config):
     """校正配置项类型与取值范围。"""
     try:
@@ -751,6 +772,13 @@ class ApiHandler(BaseHTTPRequestHandler):
                 return
             urls_body = urls
 
+        mt_urls_body = None
+        if "mtproto_list_urls" in body:
+            mt_urls_body, err = validate_mtproto_list_urls(body.get("mtproto_list_urls"))
+            if err:
+                self._send_json({"ok": False, "error": err}, status=400)
+                return
+
         kg_enabled = body.get("known_good_enabled")
         if kg_enabled is not None and not isinstance(kg_enabled, bool):
             self._send_json(
@@ -780,6 +808,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         settings = self.server.update_settings(
             interval_minutes=interval, proxy_list_urls=urls_body,
             max_tg_latency_ms=tg_limit, known_good_enabled=kg_enabled,
+            mtproto_list_urls=mt_urls_body,
         )
         self._send_json({"ok": True, "settings": settings})
 

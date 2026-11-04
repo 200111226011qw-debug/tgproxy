@@ -69,7 +69,8 @@ python tests/test_aes_backend_race.py    # 期望 3 行 PASS
 ```
 
 该文本里需含 `https://t.me/proxy?server=…&port=…&secret=…`（或 `tg://proxy?…`）行。
-重启后生效。判断是否接通看两处：
+改配置文件需重启；也可以在运行时 `PUT /api/settings`，body 里带
+`{"mtproto_list_urls": ["…"]}`，立即生效（`[]` 表示清空）。判断是否接通看两处：
 
 - 侧栏「MTProto 源」→ `N 个候选`（而不再是「未配置」）
 - `/api/proxies` 的 `mtproto_gate_stats` → `in_pool > 0`
