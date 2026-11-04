@@ -41,10 +41,10 @@ pip install -r requirements.txt    # 仅 cryptography
 
 ```bash
 pip install -r requirements.txt    # 必装，否则 MTProto 相关 25 个用例会失败
-python -m pytest tests -q          # 期望 189 passed
+python -m pytest tests -q          # 期望 190 passed
 ```
 
-裸环境（没装 `cryptography` / `pycryptodome`）直接跑是 `25 failed, 164 passed`，失败原因统一是
+裸环境（没装 `cryptography` / `pycryptodome`）直接跑是 `25 failed, 165 passed`，失败原因统一是
 `MtprotoError: 缺少 AES 实现`。**这是有意的硬失败，不是漏了 skip**：产品侧缺库时安静降级没问题，
 但测试侧如果 skip，CI 上会长期绿着却没人发现「真校验其实一次都没跑过」。装上就全绿。
 
